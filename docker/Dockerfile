@@ -18,6 +18,13 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
+# Install system packages required by the tools (including nmap)
+# Keep this step before switching to a non-privileged user so we have
+# permission to run apt-get.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nmap \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create a non-privileged user that the app will run under.
 # See https://docs.docker.com/go/dockerfile-user-best-practices/
 ARG UID=10001

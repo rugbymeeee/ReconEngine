@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Rapport ReconEngine</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+            @bottom-center {
+                content: "Page " counter(page) " / " counter(pages);
+                font-family: Arial, sans-serif;
+                font-size: 10pt;
+                color: #888;
+            }
+        }
+
+        body {
+            font-family: 'Helvetica', 'Arial', sans-serif;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        /* En-tête */
+        .header {
+            display: flex; /* WeasyPrint gère le Flexbox basique */
+            justify-content: space-between;
+            border-bottom: 3px solid #005f73;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .logo-text {
+            font-size: 24pt;
+            font-weight: bold;
+            color: #005f73; /* Couleur Teal/Cyber */
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .meta-info {
+            text-align: right;
+            font-size: 10pt;
+            color: #555;
+        }
+
+        /* Titres */
+        h1 { color: #0a9396; font-size: 22pt; margin-bottom: 10px; }
+        h2 { color: #005f73; font-size: 16pt; border-left: 5px solid #94d2bd; padding-left: 10px; margin-top: 30px; }
+        h3 { color: #333; font-size: 12pt; font-weight: bold; margin-top: 20px; }
+
+        /* Résumé Managérial (Boîtes) */
+        .summary-box {
+            background-color: #e9f5f5;
+            border: 1px solid #94d2bd;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .score {
+            font-size: 30pt;
+            font-weight: bold;
+            color: {% if global_risk == 'CRITIQUE' %}#ae2012{% elif global_risk == 'ELEVE' %}#e9c46a{% else %}#2a9d8f{% endif %};
+        }
+
+        /* Tableaux */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            font-size: 10pt;
+        }
+
+        th {
+            background-color: #005f73;
+            color: white;
+            padding: 10px;
+            text-align: left;
+        }
+
+        td {
+            border-bottom: 1px solid #ddd;
+            padding: 10px;
+            vertical-align: top;
+        }
+
+        tr:nth-child(even) { background-color: #f9f9f9; }
+
+        /* Badges de criticité */
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            font-size: 8pt;
+            display: inline-block;
+        }
+        .critical { background-color: #d00000; }
+        .high { background-color: #e85d04; }
+        .medium { background-color: #ffba08; color: #333; }
+        .low { background-color: #2a9d8f; }
+
+        /* Utils */
+        .footer-note {
+            font-size: 8pt;
+            color: #999;
+            text-align: center;
+            margin-top: 50px;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+        }
+        
+        /* Force le saut de page avant les détails techniques si nécessaire */
+        .page-break { page-break-before: always; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div class="logo-text">RECON<span style="color:#0a9396">ENGINE</span></div>
+        <div class="meta-info">
+            <p><strong>Date :</strong> {{ date_scan }}</p>
+            <p><strong>Cible :</strong> {{ target_ip }}</p>
+            <p><strong>Ref :</strong> #{{ scan_id }}</p>
+        </div>
+    </div>
+
+    <h1>Rapport d'Audit de Sécurité</h1>
+    
+    <div class="summary-box">
+        <h3>État de santé du système</h3>
+        <p>Le système a été audité automatiquement. Voici le niveau de risque global détecté :</p>
+        <div class="score">{{ global_risk }}</div>
+        <p>{{ summary_text }}</p>
+    </div>
+
+    <h3>Statistiques du Scan</h3>
+    <table>
+        <tr>
+            <th>Ports Scannés</th>
+            <th>Ports Ouverts</th>
+            <th>Vulnérabilités Critiques</th>
+            <th>Durée</th>
+        </tr>
+        <tr>
+            <td>{{ total_ports }}</td>
+            <td>{{ open_ports_count }}</td>
+            <td><span class="badge critical">{{ critical_count }}</span></td>
+            <td>{{ duration }}</td>
+        </tr>
+    </table>
+
+    <div class="page-break"></div>
+    <h2>Détails Techniques</h2>
+    <p>Cette section liste les ports ouverts et les services potentiellement vulnérables détectés par Nmap et les scripts d'analyse.</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 10%">Port</th>
+                <th style="width: 15%">Protocole</th>
+                <th style="width: 25%">Service</th>
+                <th style="width: 15%">Risque</th>
+                <th style="width: 35%">Observation / Recommandation</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in vulnerabilities %}
+            <tr>
+                <td><strong>{{ item.port }}</strong></td>
+                <td>{{ item.protocol }}</td>
+                <td>{{ item.service }}</td>
+                <td>
+                    <span class="badge {{ item.severity_class }}">
+                        {{ item.severity_text }}
+                    </span>
+                </td>
+                <td>{{ item.desc }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="footer-note">
+        CONFIDENTIEL - Ce document contient des informations sensibles sur la sécurité du système.<br>
+        Généré par ReconEngine Hardware Audit Tool.
+    </div>
+
+</body>
+</html>
