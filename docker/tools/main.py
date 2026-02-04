@@ -1,24 +1,83 @@
 import os
 import sys
 import pathlib
-import nmap
 import scan
 import discover
+from rich.console import Console
+from rich.table import Table
+
+
+def render_scan_result(console: Console, ip: str, data):
+    console.rule(f"Scan results for {ip}")
+    try:
+        state = data.state()
+    except Exception:
+        state = "unknown"
+
+    try:
+        protocols = data.all_protocols()
+    except Exception:
+        protocols = []
+
+    if not protocols:
+        console.print("No open ports or protocols detected.")
+        return
+
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Port", style="cyan", justify="right")
+    table.add_column("Protocol", style="green")
+    table.add_column("State", style="yellow")
+    table.add_column("Service", style="white")
+    table.add_column("Product/Version", style="dim")
+
+    def _format_service_version(pinfo: dict) -> str:
+        # Prefer explicit product+version, then extrainfo, then name
+        product = pinfo.get("product") or ""
+        version = pinfo.get("version") or ""
+        extrainfo = pinfo.get("extrainfo") or ""
+        # Combine product and version if available
+        if product or version:
+            s = " ".join(filter(None, [product.strip(), version.strip()])).strip()
+            if extrainfo:
+                # avoid duplication
+                if extrainfo not in s:
+                    s = f"{s} ({extrainfo})" if s else extrainfo
+            return s
+        if extrainfo:
+            return extrainfo
+        # Fallbacks
+        name = pinfo.get("name") or ""
+        servicefp = pinfo.get("servicefp") or ""
+        return " ".join(filter(None, [name, servicefp])).strip()
+
+    for proto in protocols:
+        ports = list(data[proto].keys())
+        for port in ports:
+            pinfo = data[proto][port]
+            st = pinfo.get("state", "")
+            name = pinfo.get("name", "")
+            prodver = _format_service_version(pinfo)
+            table.add_row(str(port), proto, st, name, prodver)
+
+    console.print(table)
+
 
 def main():
+    console = Console()
     discovered_ips = discover.main()
     if not discovered_ips:
-        print("No hosts discovered to scan.")
+        console.print("No hosts discovered to scan.")
         return
     for ip in discovered_ips:
-        print(f"Scanning host: {ip}")
+        console.print(f"[bold blue]Scanning host:[/] {ip}")
         result = scan.scan_host(ip)
         if result:
-            print(f"Scan results for {ip}:")
-            print(result)
+            render_scan_result(console, ip, result)
         else:
-            print(f"No results for {ip}")
+            console.print(f"No results for {ip}")
 
 
 if __name__ == "__main__":
     main()
+
+    

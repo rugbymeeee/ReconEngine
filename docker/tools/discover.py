@@ -18,7 +18,7 @@ def discover_network():
     return ip_addresses
 
 
-def scan_network(network, timeout=2):
+def scan_network(network, timeout=10):
     try:
         ans, _ = arping(str(network), timeout=timeout, verbose=False)
     except PermissionError:
@@ -32,7 +32,7 @@ def scan_network(network, timeout=2):
     return hosts
 
 
-def discover_hosts(iface=None, network=None, timeout=2):
+def discover_hosts(iface=None, network=None, timeout=10):
     results = {}
     if network:
         net = ipaddress.ip_network(network, strict=False)
@@ -59,7 +59,7 @@ def main():
     parser = argparse.ArgumentParser(description="Discover hosts on local network(s) via ARP scan")
     parser.add_argument("-i", "--iface", default='wlan0', help="Interface to scan (e.g. eth0)")
     parser.add_argument("-n", "--network", help="Network to scan (CIDR, e.g. 192.168.1.0/16)")
-    parser.add_argument("-t", "--timeout", type=int, default=2, help="ARP timeout seconds")
+    parser.add_argument("-t", "--timeout", type=int, default=10, help="ARP timeout seconds")
     args = parser.parse_args()
 
     results = discover_hosts(iface=args.iface, network=args.network, timeout=args.timeout)

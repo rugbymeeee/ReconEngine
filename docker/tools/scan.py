@@ -1,18 +1,33 @@
 import os
 import pathlib
+import shutil
 import nmap
+import sys
+import logging
+
+log = logging.getLogger(__name__)
 
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
-NMAP_PATH = os.path.join(SCRIPT_DIR, 'nmap', 'nmap')
+# Prefer an explicit env var, then system `nmap`, then bundled path
+_BUNDLED_NMAP = os.path.join(SCRIPT_DIR, 'nmap', 'nmap')
+_ENV_NMAP = os.environ.get('NMAP_PATH')
+_SYSTEM_NMAP = shutil.which('nmap')
+# Build a tuple of candidate paths for python-nmap to search
+NMAP_PATH = tuple(p for p in (_ENV_NMAP, _SYSTEM_NMAP, _BUNDLED_NMAP) if p)
 
 
-def scan_host(ip, ports="1-65535", arguments="-Pn -sS -sV -O --script vuln"):
-    nm = nmap.PortScanner(nmap_search_path=(NMAP_PATH,))
+def _get_portscanner():
+    """Return a configured nmap.PortScanner or raise a helpful RuntimeError."""
+    return nmap.PortScanner(nmap_search_path=NMAP_PATH)
+
+
+def scan_host(ip, ports="1-3389", arguments="-Pn -sV -T4 --min-rate 1000"):
+    nm = _get_portscanner()
     nm.scan(ip, ports, arguments=arguments)
     return nm[ip] if ip in nm.all_hosts() else None
 
-def scan_network(network, ports="1-65535", arguments="-Pn -sS -sV -O --script vuln"):
-    nm = nmap.PortScanner(nmap_search_path=(NMAP_PATH,))
+def scan_network(network, ports="1-3389", arguments="-Pn -sV -T4 --min-rate 1000"):
+    nm = _get_portscanner()
     nm.scan(hosts=network, ports=ports, arguments=arguments)
     results = {}
     for host in nm.all_hosts():
