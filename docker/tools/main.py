@@ -63,18 +63,22 @@ def render_scan_result(console: Console, ip: str, data):
 
 
 def main():
-    console = Console()
-    discovered_ips = discover.main()
-    if not discovered_ips:
-        console.print("No hosts discovered to scan.")
-        return
-    for ip in discovered_ips:
-        console.print(f"[bold blue]Scanning host:[/] {ip}")
-        result = scan.scan_host(ip)
-        if result:
-            render_scan_result(console, ip, result)
-        else:
-            console.print(f"No results for {ip}")
+    try:
+        console = Console()
+        discovered_ips = discover.main()
+        if not discovered_ips:
+            console.print("No hosts discovered to scan.")
+            return
+        for ip in discovered_ips:
+            console.print(f"[bold blue]Scanning host:[/] {ip}")
+            result = scan.scan_host(ip)
+            if result:
+                render_scan_result(console, ip, result)
+            else:
+                console.print(f"No results for {ip}")
+    except KeyboardInterrupt:
+        console.print("\nScan interrupted by user. Exiting.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
