@@ -4,6 +4,8 @@ import shutil
 import nmap
 import sys
 import logging
+import subprocess
+import json
 
 log = logging.getLogger(__name__)
 
@@ -45,4 +47,31 @@ def save_scan_results(scan_data, output_file):
                 for port in lport:
                     f.write(f"  Port: {port}\tState: {data[proto][port]['state']}\tService: {data[proto][port]['name']}\n")
             f.write("\n")
+
+
+def find_exploits(software: str, max_results: int = 5):
+    """Query searchsploit for exploits matching `software` and return a list of results.
+
+    Returns a list of exploit dicts (may be empty). If `searchsploit` is not available
+    or output cannot be parsed, returns an empty list.
+    """
+    if not software:
+        return []
+    cmd = ["searchsploit", software, "--json"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        # searchsploit not installed on host
+        return []
+
+    if not res.stdout:
+        return []
+
+    try:
+        data = json.loads(res.stdout)
+    except json.JSONDecodeError:
+        return []
+
+    results = data.get("RESULTS_EXPLOIT") or []
+    return results[:max_results]
 

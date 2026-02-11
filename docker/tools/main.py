@@ -29,6 +29,7 @@ def render_scan_result(console: Console, ip: str, data):
     table.add_column("State", style="yellow")
     table.add_column("Service", style="white")
     table.add_column("Product/Version", style="dim")
+    table.add_column("Exploit(s)", style="red")
 
     def _format_service_version(pinfo: dict) -> str:
         # Prefer explicit product+version, then extrainfo, then name
@@ -57,7 +58,21 @@ def render_scan_result(console: Console, ip: str, data):
             st = pinfo.get("state", "")
             name = pinfo.get("name", "")
             prodver = _format_service_version(pinfo)
-            table.add_row(str(port), proto, st, name, prodver)
+            # Build a concise software query for searchsploit: prefer product+version, fallback to name
+            software_query = "".join(filter(None, [pinfo.get("product") or "", " ", pinfo.get("version") or ""]))
+            software_query = software_query.strip() or name
+            exploits = []
+            try:
+                exploits = scan.find_exploits(software_query)
+            except Exception:
+                exploits = []
+
+            if exploits:
+                exploit_summary = "| ".join(e.get("Title", "?") for e in exploits[:2])
+            else:
+                exploit_summary = ""
+
+            table.add_row(str(port), proto, st, name, prodver, exploit_summary)
 
     console.print(table)
 
