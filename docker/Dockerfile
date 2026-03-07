@@ -22,7 +22,11 @@ WORKDIR /app
 # Keep this step before switching to a non-privileged user so we have
 # permission to run apt-get.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nmap \
+    && apt-get install -y --no-install-recommends \
+        nmap \
+        fonts-dejavu-core \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-privileged user that the app will run under.
@@ -55,4 +59,7 @@ COPY . .
 EXPOSE 8000
 
 # Run the application.
-CMD gunicorn", "--bind", "0.0.0.0:8000", "myapp.example:app"
+# Default: interactive LCD menu (Raspberry Pi with ST7789 + GPIO buttons).
+# Override at runtime for headless/CLI usage:
+#   docker run ... python main.py
+CMD ["python", "lcd_menu.py"]

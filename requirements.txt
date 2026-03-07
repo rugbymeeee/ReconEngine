@@ -1,36 +1,35 @@
-weasyprint==68.0
+# ── Core scanning tools ───────────────────────────────────────────────────────
 python-nmap==0.7.1
 scapy==2.7.0
+
+# ── Report generation ─────────────────────────────────────────────────────────
+weasyprint==68.0
 Jinja2==3.1.6
-Pillow==12.1.0
+MarkupSafe==3.0.3
 tinycss2==1.5.1
 cssselect2==0.8.0
 pyphen==0.17.2
 pydyf==0.12.1
 webencodings==0.5.1
-zopfli==0.4.0
-brotli==1.2.0
-cffi==2.0.0
-pycparser==3.0.0
-fonttools==4.61.1
 tinyhtml5==2.0.0
-MarkupSafe==3.0.3
-rich
-weasyprint==68.0
-python-nmap==0.7.1
-scapy==2.7.0
-Jinja2==3.1.6
+
+# ── Image / font handling ─────────────────────────────────────────────────────
 Pillow==12.1.0
-tinycss2==1.5.1
-cssselect2==0.8.0
-pyphen==0.17.2
-pydyf==0.12.1
-webencodings==0.5.1
+fonttools==4.61.1
+
+# ── Compression (WeasyPrint font subsetting) ───────────────────────────────────
 zopfli==0.4.0
 brotli==1.2.0
+
+# ── FFI (WeasyPrint/cffi) ─────────────────────────────────────────────────────
 cffi==2.0.0
 pycparser==3.0.0
-fonttools==4.61.1
-tinyhtml5==2.0.0
-MarkupSafe==3.0.3
+
+# ── Terminal UI ───────────────────────────────────────────────────────────────
 rich
+
+# ── LCD display (ST7789 SPI, Raspberry Pi only) ───────────────────────────────
+# Install on the Pi with:  pip install st7789 RPi.GPIO
+# Omit these lines when building the Docker image for non-Pi targets.
+st7789
+RPi.GPIO
