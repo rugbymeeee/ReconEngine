@@ -57,7 +57,7 @@ def discover_hosts(iface=None, network=None, timeout=100):
 def main():
     iplist = []
     parser = argparse.ArgumentParser(description="Discover hosts on local network(s) via ARP scan")
-    parser.add_argument("-i", "--iface", default='wlan0', help="Interface to scan (e.g. eth0)")
+    parser.add_argument("-i", "--iface", help="Interface to scan (e.g. eth0)")
     parser.add_argument("-n", "--network", help="Network to scan (CIDR, e.g. 192.248.1.0/24)")
     parser.add_argument("-t", "--timeout", type=int, default=100, help="ARP timeout seconds")
     args = parser.parse_args()
