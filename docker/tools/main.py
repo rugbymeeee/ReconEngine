@@ -1,8 +1,10 @@
 import os
 import sys
 import pathlib
+import time
 import scan
 import discover
+import rapport
 from rich.console import Console
 from rich.table import Table
 
@@ -84,13 +86,25 @@ def main():
         if not discovered_ips:
             console.print("No hosts discovered to scan.")
             return
+        scan_results = {}
+        start_time = time.time()
         for ip in discovered_ips:
             console.print(f"[bold blue]Scanning host:[/] {ip}")
             result = scan.scan_host(ip)
             if result:
                 render_scan_result(console, ip, result)
+                scan_results[ip] = result
             else:
                 console.print(f"No results for {ip}")
+        elapsed = time.time() - start_time
+        minutes, seconds = divmod(int(elapsed), 60)
+        duration = f"{minutes} min {seconds}s"
+
+        if scan_results:
+            console.print("\n[bold green]Generating PDF report...[/]")
+            rapport.generate_report(scan_results, duration=duration)
+        else:
+            console.print("No scan results to report.")
     except KeyboardInterrupt:
         console.print("\nScan interrupted by user. Exiting.")
         sys.exit(0)
