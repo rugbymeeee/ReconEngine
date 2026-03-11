@@ -20,7 +20,7 @@ from typing import List, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
-import lcd_config as cfg
+import docker.tools.gpio_lcd.lcd_config as cfg
 
 log = logging.getLogger(__name__)
 

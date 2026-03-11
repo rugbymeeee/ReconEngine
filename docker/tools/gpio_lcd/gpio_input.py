@@ -24,7 +24,7 @@ import logging
 import time
 from typing import Optional
 
-import lcd_config as cfg
+import docker.tools.gpio_lcd.lcd_config as cfg
 
 log = logging.getLogger(__name__)
 

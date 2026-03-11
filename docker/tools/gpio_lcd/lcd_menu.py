@@ -25,9 +25,9 @@ import sys
 import time
 from typing import List, Optional
 
-import lcd_config as cfg
-import lcd_driver
-import gpio_input
+import docker.tools.gpio_lcd.lcd_config as cfg
+import docker.tools.gpio_lcd.lcd_driver as lcd_driver
+import docker.tools.gpio_lcd.gpio_input as gpio_input
 import discover
 import scan
 
