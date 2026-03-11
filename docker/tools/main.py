@@ -80,34 +80,38 @@ def render_scan_result(console: Console, ip: str, data):
 
 
 def main():
+    console = Console()
+    scan_results = {}
+    start_time = time.time()
     try:
-        console = Console()
         discovered_ips = discover.main()
         if not discovered_ips:
             console.print("No hosts discovered to scan.")
             return
-        scan_results = {}
-        start_time = time.time()
         for ip in discovered_ips:
             console.print(f"[bold blue]Scanning host:[/] {ip}")
-            result = scan.scan_host(ip)
+            try:
+                result = scan.scan_host(ip)
+            except KeyboardInterrupt:
+                console.print(f"\n[yellow]Scan of {ip} interrupted, skipping.[/]")
+                break
             if result:
                 render_scan_result(console, ip, result)
                 scan_results[ip] = result
             else:
                 console.print(f"No results for {ip}")
-        elapsed = time.time() - start_time
-        minutes, seconds = divmod(int(elapsed), 60)
-        duration = f"{minutes} min {seconds}s"
-
-        if scan_results:
-            console.print("\n[bold green]Generating PDF report...[/]")
-            rapport.generate_report(scan_results, duration=duration)
-        else:
-            console.print("No scan results to report.")
     except KeyboardInterrupt:
-        console.print("\nScan interrupted by user. Exiting.")
-        sys.exit(0)
+        console.print("\n[yellow]Interrupted.[/]")
+
+    elapsed = time.time() - start_time
+    minutes, seconds = divmod(int(elapsed), 60)
+    duration = f"{minutes} min {seconds}s"
+
+    if scan_results:
+        console.print(f"\n[bold green]Generating PDF report...[/]")
+        rapport.generate_report(scan_results, duration=duration)
+    else:
+        console.print("No scan results to report.")
 
 
 if __name__ == "__main__":
