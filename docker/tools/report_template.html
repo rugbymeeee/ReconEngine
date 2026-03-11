@@ -100,6 +100,7 @@
         .high { background-color: #e85d04; }
         .medium { background-color: #ffba08; color: #333; }
         .low { background-color: #2a9d8f; }
+        .filtered-badge { background-color: #6c757d; }
 
         /* Utils */
         .footer-note {
@@ -216,6 +217,10 @@
                 <div>Ports ouverts</div>
             </div>
             <div class="host-stat-item">
+                <div class="host-stat-value">{{ host.filtered_ports_count }}</div>
+                <div>Ports filtrés</div>
+            </div>
+            <div class="host-stat-item">
                 <div class="host-stat-value">{{ host.critical_count }}</div>
                 <div>Critiques</div>
             </div>
@@ -225,11 +230,12 @@
         <table>
             <thead>
                 <tr>
-                    <th style="width: 10%">Port</th>
-                    <th style="width: 15%">Protocole</th>
-                    <th style="width: 25%">Service</th>
-                    <th style="width: 15%">Risque</th>
-                    <th style="width: 35%">Observation / Recommandation</th>
+                    <th style="width: 8%">Port</th>
+                    <th style="width: 10%">Proto</th>
+                    <th style="width: 10%">État</th>
+                    <th style="width: 20%">Service</th>
+                    <th style="width: 12%">Risque</th>
+                    <th style="width: 40%">Observation / Recommandation</th>
                 </tr>
             </thead>
             <tbody>
@@ -237,6 +243,13 @@
                 <tr>
                     <td><strong>{{ item.port }}</strong></td>
                     <td>{{ item.protocol }}</td>
+                    <td>
+                        {% if item.state == 'filtered' %}
+                        <span class="badge filtered-badge">filtré</span>
+                        {% else %}
+                        <span class="badge low">ouvert</span>
+                        {% endif %}
+                    </td>
                     <td>{{ item.service }}</td>
                     <td>
                         <span class="badge {{ item.severity_class }}">
@@ -249,7 +262,7 @@
             </tbody>
         </table>
         {% else %}
-        <p><em>Aucun port ouvert détecté sur cette machine.</em></p>
+        <p><em>Aucun port détecté sur cette machine.</em></p>
         {% endif %}
     </div>
     {% endfor %}

@@ -8,14 +8,75 @@ import scan as scan_module
 SCRIPT_DIR = os.path.dirname(__file__)
 
 # Ports critiques connus qui augmentent le niveau de risque
-CRITICAL_PORTS = {21, 23, 445, 135, 139, 3389, 1433, 3306, 5432}
-HIGH_RISK_SERVICES = {"smb", "microsoft-ds", "telnet", "ftp", "ms-sql", "mysql", "vnc"}
+CRITICAL_PORTS = {
+    # --- Protocoles en clair (Mots de passe non chiffrés) ---
+    21,    # FTP
+    23,    # Telnet
+    69,    # TFTP (Aucune authentification requise)
+    512, 513, 514, # Rexec, Rlogin, Rsh (Anciens protocoles Unix très vulnérables)
+    
+    # --- Partages de fichiers et RPC (Mouvements latéraux) ---
+    135,   # MSRPC
+    139,   # NetBIOS
+    445,   # SMB / CIFS (Cible n°1 pour les ransomwares / EternalBlue)
+    111,   # RPCBind (Souvent lié à NFS)
+    873,   # Rsync (Souvent exposé sans mot de passe)
+    2049,  # NFS (Partage de fichiers Linux)
+    
+    # --- Bases de données (Fuite d'informations critiques) ---
+    1433,  # Microsoft SQL Server
+    1521,  # Oracle DB
+    3306,  # MySQL / MariaDB
+    5432,  # PostgreSQL
+    6379,  # Redis (Souvent sans authentification, mène à une exécution de code - RCE)
+    9200,  # Elasticsearch (Fuite de données massive si exposé)
+    11211, # Memcached (Utilisé pour des attaques DDoS ou fuites)
+    27017, # MongoDB (Souvent exposé sans auth par défaut)
+    
+    # --- Prise de contrôle à distance ---
+    3389,  # RDP (Bureau à distance Windows)
+    5900, 5901, # VNC (Contrôle d'écran)
+    
+    # --- Infrastructures modernes mal configurées ---
+    1099,  # Java RMI (Cible classique pour exécution de code RCE)
+    2375, 2376  # API Docker (Si ouvert, donne un accès root immédiat à l'hôte)
+}
 
+HIGH_RISK_SERVICES = {
+    # Partage et Réseau Windows/Linux
+    "smb", "microsoft-ds", "netbios-ssn", 
+    "rpcbind", "nfs", "rsync",
+    
+    # Protocoles en clair
+    "ftp", "telnet", "tftp", "rlogin", "rsh", "exec",
+    
+    # Bases de données
+    "ms-sql", "ms-sql-s", "mysql", "postgresql", 
+    "oracle-tns", "redis", "mongodb", "elasticsearch", "memcached",
+    
+    # Accès distants
+    "vnc", "ms-wbt-server", # ms-wbt-server est le nom Nmap pour RDP
+    "x11", # Interface graphique Linux parfois exposée
+    
+    # Autres services critiques
+    "snmp", # Si version 1 ou 2c, fuite énorme d'infos sur le réseau
+    "ldap", "ldaps", # Active Directory (si requêtes anonymes autorisées)
+    "java-rmi",
+    "docker"
+}
 
 def _classify_port(port, pinfo, exploits):
     """Classify a port/service into a severity level based on exploits and known risks."""
     name = (pinfo.get("name") or "").lower()
     state = pinfo.get("state", "")
+
+    if state == "filtered":
+        # Filtered ports with exploits are still critical
+        if exploits:
+            return "critical", "CRITIQUE"
+        if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
+            return "medium", "MOYEN"
+        return "low", "FAIBLE"
 
     if state != "open":
         return "low", "FAIBLE"
@@ -34,9 +95,14 @@ def _build_description(pinfo, exploits):
     product = (pinfo.get("product") or "").strip()
     version = (pinfo.get("version") or "").strip()
     name = (pinfo.get("name") or "").strip()
+    state = pinfo.get("state", "")
     service_label = " ".join(filter(None, [product, version])) or name or "Service inconnu"
 
-    parts = [f"Service détecté : {service_label}."]
+    parts = []
+    if state == "filtered":
+        parts.append(f"Port filtré — service probable : {service_label}.")
+    else:
+        parts.append(f"Service détecté : {service_label}.")
 
     if exploits:
         titles = [e.get("Title", "?") for e in exploits[:3]]
@@ -66,6 +132,7 @@ def _build_host_data(ip, data):
     """Build vulnerability list and stats for a single host."""
     vulns = []
     open_count = 0
+    filtered_count = 0
     critical_count = 0
 
     try:
@@ -77,10 +144,15 @@ def _build_host_data(ip, data):
         ports = list(data[proto].keys())
         for port in ports:
             pinfo = data[proto][port]
-            if pinfo.get("state") != "open":
+            state = pinfo.get("state", "")
+
+            if state not in ("open", "filtered"):
                 continue
 
-            open_count += 1
+            if state == "open":
+                open_count += 1
+            else:
+                filtered_count += 1
 
             software_query = " ".join(filter(None, [
                 (pinfo.get("product") or "").strip(),
@@ -98,14 +170,16 @@ def _build_host_data(ip, data):
             vulns.append({
                 "port": port,
                 "protocol": proto.upper(),
+                "state": state,
                 "service": _format_service(pinfo),
                 "severity_class": severity_class,
                 "severity_text": severity_text,
                 "desc": _build_description(pinfo, exploits),
             })
 
+    state_order = {"open": 0, "filtered": 1}
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    vulns.sort(key=lambda v: severity_order.get(v["severity_class"], 4))
+    vulns.sort(key=lambda v: (state_order.get(v["state"], 2), severity_order.get(v["severity_class"], 4)))
 
     host_risk = _compute_global_risk(vulns) if vulns else "FAIBLE"
 
@@ -113,6 +187,7 @@ def _build_host_data(ip, data):
         "ip": ip,
         "risk": host_risk,
         "open_ports_count": open_count,
+        "filtered_ports_count": filtered_count,
         "critical_count": critical_count,
         "vulnerabilities": vulns,
     }
@@ -133,18 +208,21 @@ def build_report_data(scan_results, total_ports_scanned=3389):
     """
     hosts = []
     total_open = 0
+    total_filtered = 0
     total_critical = 0
 
     for ip, data in scan_results.items():
         host = _build_host_data(ip, data)
         hosts.append(host)
         total_open += host["open_ports_count"]
+        total_filtered += host["filtered_ports_count"]
         total_critical += host["critical_count"]
 
     all_vulns = [v for h in hosts for v in h["vulnerabilities"]]
     global_risk = _compute_global_risk(all_vulns) if all_vulns else "FAIBLE"
 
-    summary_parts = [f"{total_open} port(s) ouvert(s) détecté(s) sur {len(hosts)} hôte(s)."]
+    summary_parts = []
+    summary_parts.append(f"{total_open} port(s) ouvert(s) et {total_filtered} port(s) filtré(s) détecté(s) sur {len(hosts)} hôte(s).")
     if total_critical:
         summary_parts.append(f"{total_critical} vulnérabilité(s) critique(s) identifiée(s). Action immédiate recommandée.")
     else:
