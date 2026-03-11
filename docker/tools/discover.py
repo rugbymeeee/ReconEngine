@@ -162,7 +162,8 @@ def discover_hosts(iface=None, network=None, timeout=5):
     Returns (results_dict, local_ips_set).
     """
     if not _is_root():
-        print("[!] Running without root — ARP scan disabled, nmap used for small networks only.")
+        print("[!] Please run as root.")
+        exit(1)
 
     results = {}
 
