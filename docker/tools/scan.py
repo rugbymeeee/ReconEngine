@@ -62,6 +62,11 @@ def find_exploits(software: str, max_results: int = 5):
         res = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
         # searchsploit not installed on host
+        log.warning("searchsploit binary not found; exploit enrichment disabled")
+        return []
+
+    if res.returncode != 0:
+        log.warning("searchsploit returned non-zero status (%s) for query '%s'", res.returncode, software)
         return []
 
     if not res.stdout:
@@ -70,6 +75,7 @@ def find_exploits(software: str, max_results: int = 5):
     try:
         data = json.loads(res.stdout)
     except json.JSONDecodeError:
+        log.warning("Invalid JSON from searchsploit for query '%s'", software)
         return []
 
     results = data.get("RESULTS_EXPLOIT") or []

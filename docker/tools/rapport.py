@@ -1,11 +1,21 @@
 from weasyprint import HTML
 from jinja2 import Environment, FileSystemLoader
 import datetime
+import logging
 import os
-import time
 import scan as scan_module
 
 SCRIPT_DIR = os.path.dirname(__file__)
+log = logging.getLogger(__name__)
+
+SEVERITY_ORDER = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+SEVERITY_WEIGHTS = {"critical": 30, "high": 18, "medium": 8, "low": 2}
+LEVEL_THRESHOLDS = [
+    (75, "CRITIQUE"),
+    (50, "ELEVE"),
+    (25, "MODERE"),
+    (0, "FAIBLE"),
+]
 
 # Ports critiques connus qui augmentent le niveau de risque
 CRITICAL_PORTS = {
@@ -75,7 +85,7 @@ def _classify_port(port, pinfo, exploits):
         if exploits:
             return "critical", "CRITIQUE"
         if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
-            return "medium", "MOYEN"
+            return "high", "ELEVE"
         return "low", "FAIBLE"
 
     if state != "open":
@@ -120,24 +130,79 @@ def _format_service(pinfo):
 
 
 def _compute_global_risk(vulnerabilities):
-    """Determine global risk from the list of vulnerability entries."""
-    severity_order = {"critical": 3, "high": 2, "medium": 1, "low": 0}
-    max_level = 0
+    """Determine risk score/level from vulnerability entries."""
+    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
     for v in vulnerabilities:
-        max_level = max(max_level, severity_order.get(v["severity_class"], 0))
-    return {3: "Critique", 2: "Elevé", 1: "Modéré", 0: "Faible"}[max_level]
+        sev = v.get("severity_class", "low")
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+    return _compute_risk_from_counts(severity_counts)
 
 
-def _build_host_data(ip, data):
+def _compute_risk_from_counts(severity_counts):
+    """Return a normalized score (0-100) and textual level from severity counts."""
+    total_items = sum(severity_counts.values())
+    if total_items <= 0:
+        return 0.0, "FAIBLE"
+
+    weighted = 0
+    for severity, count in severity_counts.items():
+        weight = SEVERITY_WEIGHTS.get(severity, 0)
+        weighted += weight * max(0, count)
+
+    max_weighted = total_items * SEVERITY_WEIGHTS["critical"]
+    score = round((weighted / max_weighted) * 100, 1) if max_weighted else 0.0
+
+    for threshold, label in LEVEL_THRESHOLDS:
+        if score >= threshold:
+            return score, label
+    return score, "FAIBLE"
+
+
+def _safe_percent(numerator, denominator):
+    if denominator <= 0:
+        return 0.0
+    return round((numerator / denominator) * 100, 2)
+
+
+def _normalize_total_ports(total_ports_scanned):
+    try:
+        total_ports = int(total_ports_scanned)
+    except (TypeError, ValueError):
+        raise ValueError("total_ports_scanned must be a positive integer")
+
+    if total_ports <= 0:
+        raise ValueError("total_ports_scanned must be greater than 0")
+    return total_ports
+
+
+def _lookup_exploits(software_query, exploit_cache):
+    key = (software_query or "").strip().lower()
+    if not key:
+        return []
+
+    if key in exploit_cache:
+        return exploit_cache[key]
+
+    try:
+        exploit_cache[key] = scan_module.find_exploits(software_query)
+    except Exception:
+        log.exception("Exploit lookup failed for query='%s'", software_query)
+        exploit_cache[key] = []
+    return exploit_cache[key]
+
+
+def _build_host_data(ip, data, total_ports_scanned, exploit_cache):
     """Build vulnerability list and stats for a single host."""
     vulns = []
     open_count = 0
     filtered_count = 0
-    critical_count = 0
+    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    service_inventory = {}
 
     try:
         protocols = data.all_protocols()
     except Exception:
+        log.exception("Unable to read protocols for host '%s'", ip)
         protocols = []
 
     for proto in protocols:
@@ -158,37 +223,50 @@ def _build_host_data(ip, data):
                 (pinfo.get("product") or "").strip(),
                 (pinfo.get("version") or "").strip(),
             ])).strip() or (pinfo.get("name") or "")
-            try:
-                exploits = scan_module.find_exploits(software_query)
-            except Exception:
-                exploits = []
+            exploits = _lookup_exploits(software_query, exploit_cache)
 
             severity_class, severity_text = _classify_port(port, pinfo, exploits)
-            if severity_class == "critical":
-                critical_count += 1
+            severity_counts[severity_class] = severity_counts.get(severity_class, 0) + 1
+
+            service_name = _format_service(pinfo)
+            service_key = (pinfo.get("name") or service_name or "inconnu").strip().lower()
+            if service_key:
+                service_inventory[service_key] = service_inventory.get(service_key, 0) + 1
 
             vulns.append({
                 "port": port,
                 "protocol": proto.upper(),
                 "state": state,
-                "service": _format_service(pinfo),
+                "service": service_name,
                 "severity_class": severity_class,
                 "severity_text": severity_text,
                 "desc": _build_description(pinfo, exploits),
+                "exploit_count": len(exploits),
             })
 
     state_order = {"open": 0, "filtered": 1}
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     vulns.sort(key=lambda v: (state_order.get(v["state"], 2), severity_order.get(v["severity_class"], 4)))
 
-    host_risk = _compute_global_risk(vulns) if vulns else "FAIBLE"
+    risk_score, risk_level = _compute_global_risk(vulns)
+    critical_count = severity_counts["critical"]
+    closed_count = max(total_ports_scanned - open_count - filtered_count, 0)
+    vuln_density = round(len(vulns) / open_count, 2) if open_count else 0.0
+    exposure_rate = _safe_percent(open_count + filtered_count, total_ports_scanned)
 
     return {
         "ip": ip,
-        "risk": host_risk,
+        "risk": risk_level,
+        "risk_level": risk_level,
+        "risk_score": risk_score,
         "open_ports_count": open_count,
         "filtered_ports_count": filtered_count,
+        "closed_ports_count": closed_count,
         "critical_count": critical_count,
+        "severity_counts": severity_counts,
+        "vulnerability_density": vuln_density,
+        "exposure_rate": exposure_rate,
+        "service_inventory": dict(sorted(service_inventory.items())),
         "vulnerabilities": vulns,
     }
 
@@ -206,38 +284,82 @@ def build_report_data(scan_results, total_ports_scanned=3389):
 
     Returns a dict ready to be passed to the Jinja2 template.
     """
+    if not isinstance(scan_results, dict):
+        raise ValueError("scan_results must be a dict mapping ip -> host data")
+
+    total_ports_scanned = _normalize_total_ports(total_ports_scanned)
     hosts = []
     total_open = 0
     total_filtered = 0
-    total_critical = 0
+    severity_totals = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    host_risk_distribution = {"CRITIQUE": 0, "ELEVE": 0, "MODERE": 0, "FAIBLE": 0}
+    service_inventory_global = {}
+    exploit_cache = {}
 
     for ip, data in scan_results.items():
-        host = _build_host_data(ip, data)
+        if data is None:
+            log.warning("Skipping host '%s': empty scan data", ip)
+            continue
+
+        host = _build_host_data(ip, data, total_ports_scanned, exploit_cache)
         hosts.append(host)
         total_open += host["open_ports_count"]
         total_filtered += host["filtered_ports_count"]
-        total_critical += host["critical_count"]
+        for severity, count in host["severity_counts"].items():
+            severity_totals[severity] = severity_totals.get(severity, 0) + count
+        host_risk_distribution[host["risk_level"]] = host_risk_distribution.get(host["risk_level"], 0) + 1
+        for svc, count in host["service_inventory"].items():
+            service_inventory_global[svc] = service_inventory_global.get(svc, 0) + count
 
-    all_vulns = [v for h in hosts for v in h["vulnerabilities"]]
-    global_risk = _compute_global_risk(all_vulns) if all_vulns else "FAIBLE"
+    total_hosts = len(hosts)
+    total_possible_ports = total_ports_scanned * total_hosts
+    total_closed = max(total_possible_ports - total_open - total_filtered, 0)
+
+    global_score, global_risk = _compute_risk_from_counts(severity_totals)
+    total_critical = severity_totals["critical"]
+    total_vulnerabilities = sum(severity_totals.values())
+    exposure_rate = _safe_percent(total_open + total_filtered, total_possible_ports)
+    stealth_score = _safe_percent(total_closed, total_possible_ports)
+    critical_hosts_count = host_risk_distribution["CRITIQUE"]
 
     summary_parts = []
-    summary_parts.append(f"{total_open} port(s) ouvert(s) et {total_filtered} port(s) filtré(s) détecté(s) sur {len(hosts)} hôte(s).")
+    summary_parts.append(
+        f"{total_open} port(s) ouvert(s), {total_filtered} port(s) filtré(s) et {total_closed} port(s) fermé(s) "
+        f"sur {total_hosts} hôte(s)."
+    )
+    summary_parts.append(
+        f"Exposition globale: {exposure_rate}% | Score de discrétion: {stealth_score}%."
+    )
     if total_critical:
-        summary_parts.append(f"{total_critical} vulnérabilité(s) critique(s) identifiée(s). Action immédiate recommandée.")
+        summary_parts.append(
+            f"{total_critical} vulnérabilité(s) critique(s) identifiée(s), "
+            f"dont {critical_hosts_count} hôte(s) au niveau CRITIQUE."
+        )
     else:
         summary_parts.append("Aucune vulnérabilité critique détectée.")
 
     return {
         "date_scan": datetime.datetime.now().strftime("%d/%m/%Y à %H:%M"),
         "target_ips": [ip for ip in scan_results.keys()],
-        "host_count": len(hosts),
+        "host_count": total_hosts,
         "scan_id": f"RE-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
         "global_risk": global_risk,
+        "risk_score": global_score,
         "summary_text": " ".join(summary_parts),
         "total_ports": total_ports_scanned,
+        "total_possible_ports": total_possible_ports,
         "open_ports_count": total_open,
+        "filtered_ports_count": total_filtered,
+        "closed_ports_count": total_closed,
         "critical_count": total_critical,
+        "total_vulnerabilities": total_vulnerabilities,
+        "severity_totals": severity_totals,
+        "host_risk_distribution": host_risk_distribution,
+        "critical_hosts_count": critical_hosts_count,
+        "exposure_rate": exposure_rate,
+        "stealth_score": stealth_score,
+        "service_inventory": dict(sorted(service_inventory_global.items(), key=lambda item: item[1], reverse=True)),
+        "top_services": sorted(service_inventory_global.items(), key=lambda item: item[1], reverse=True)[:6],
         "duration": "",
         "hosts": hosts,
     }
@@ -259,7 +381,7 @@ def generate_report(scan_results, output_path=None, duration=None, total_ports=3
         Number of ports scanned.
     """
     if output_path is None:
-        output_path = "Rapport_Audit_ReconEngine.pdf"
+        output_path = f"Rapport_Audit_ReconEngine_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
 
     data = build_report_data(scan_results, total_ports_scanned=total_ports)
     if duration:
@@ -269,9 +391,9 @@ def generate_report(scan_results, output_path=None, duration=None, total_ports=3
     template = env.get_template("report_template.html")
     html_out = template.render(data)
 
-    print("Génération du PDF...")
+    print("Generation du PDF...")
     HTML(string=html_out, base_url=SCRIPT_DIR).write_pdf(output_path)
-    print(f"Terminé ! Fichier : {output_path}")
+    print(f"Termine ! Fichier : {output_path}")
     return output_path
 
 
