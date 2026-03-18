@@ -23,12 +23,12 @@ def _get_portscanner():
     return nmap.PortScanner(nmap_search_path=NMAP_PATH)
 
 
-def scan_host(ip, ports="1-3389", arguments="-Pn -sS -A --script vuln --script-args mincvss=5.0 --min-rate 1000"):
+def scan_host(ip, ports="1-3389", arguments="-Pn -sS -A --script vuln --script-args mincvss=5.0"):
     nm = _get_portscanner()
     nm.scan(ip, ports, arguments=arguments)
     return nm[ip] if ip in nm.all_hosts() else None
 
-def scan_network(network, ports="1-3389", arguments="-Pn -sS -A --script vuln --script-args mincvss=5.0 --min-rate 1000"):
+def scan_network(network, ports="1-3389", arguments="-Pn -sS -A --script vuln --script-args mincvss=5.0"):
     nm = _get_portscanner()
     nm.scan(hosts=network, ports=ports, arguments=arguments)
     results = {}
