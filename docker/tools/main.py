@@ -8,9 +8,11 @@ import discover
 import rapport
 from rich.console import Console
 from rich.table import Table
+from rich.panel import Panel
 
 log = logging.getLogger(__name__)
 SCAN_PORT_RANGE = os.environ.get("RECONENGINE_PORT_RANGE", "1-3389")
+SCAN_PROFILE = os.environ.get("RECONENGINE_SCAN_PROFILE", "full")
 
 
 def _estimate_scanned_port_count(port_range: str) -> int:
@@ -117,6 +119,39 @@ def render_scan_result(console: Console, ip: str, data):
 
 def main():
     console = Console()
+
+    # Parse command-line arguments for scan profile
+    profile = SCAN_PROFILE
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].lower()
+        if arg in ["quick", "fast", "rapide"]:
+            profile = "quick"
+        elif arg in ["full", "complete", "complet"]:
+            profile = "full"
+        elif arg in ["-h", "--help", "help"]:
+            console.print(Panel.fit(
+                "[bold]ReconEngine - Network Reconnaissance Tool[/]\n\n"
+                "[cyan]Usage:[/] python main.py [profile]\n\n"
+                "[yellow]Profils de scan disponibles:[/]\n"
+                "  • [green]quick[/] ou [green]rapide[/] - Scan rapide (détection basique des ports)\n"
+                "  • [green]full[/] ou [green]complet[/] - Scan complet (détection approfondie + vulnérabilités)\n\n"
+                "[cyan]Variables d'environnement:[/]\n"
+                "  • RECONENGINE_SCAN_PROFILE - Profil par défaut (quick/full)\n"
+                "  • RECONENGINE_PORT_RANGE - Ports à scanner (défaut: 1-3389)",
+                title="Aide",
+                border_style="blue"
+            ))
+            return
+
+    # Display scan profile info
+    profile_info = scan.SCAN_PROFILES.get(profile, scan.SCAN_PROFILES["full"])
+    console.print(Panel.fit(
+        f"[bold]Profil de scan:[/] [cyan]{profile}[/]\n"
+        f"[dim]{profile_info['description']}[/]\n"
+        f"[yellow]Arguments:[/] {profile_info['arguments']}",
+        border_style="green"
+    ))
+
     scan_results = {}
     start_time = time.time()
     try:
@@ -127,7 +162,7 @@ def main():
         for ip in discovered_ips:
             console.print(f"[bold blue]Scanning host:[/] {ip}")
             try:
-                result = scan.scan_host(ip, ports=SCAN_PORT_RANGE)
+                result = scan.scan_host(ip, ports=SCAN_PORT_RANGE, profile=profile)
             except KeyboardInterrupt:
                 console.print(f"\n[yellow]Scan of {ip} interrupted, skipping.[/]")
                 break
