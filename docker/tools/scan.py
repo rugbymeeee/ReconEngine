@@ -10,12 +10,22 @@ import json
 log = logging.getLogger(__name__)
 
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
-# Prefer an explicit env var, then system `nmap`, then bundled path
 _BUNDLED_NMAP = os.path.join(SCRIPT_DIR, 'nmap', 'nmap')
 _ENV_NMAP = os.environ.get('NMAP_PATH')
 _SYSTEM_NMAP = shutil.which('nmap')
-# Build a tuple of candidate paths for python-nmap to search
 NMAP_PATH = tuple(p for p in (_ENV_NMAP, _SYSTEM_NMAP, _BUNDLED_NMAP) if p)
+
+# Scan profiles
+SCAN_PROFILES = {
+    "quick": {
+        "description": "Scan rapide - Détection basique des ports ouverts",
+        "arguments": "-sS -T4 --min-rate 1000"
+    },
+    "full": {
+        "description": "Scan complet - Détection approfondie avec scripts de vulnérabilité",
+        "arguments": "-Pn -sS -A --script vuln --script-args mincvss=5.0"
+    }
+}
 
 
 def _get_portscanner():
@@ -23,13 +33,33 @@ def _get_portscanner():
     return nmap.PortScanner(nmap_search_path=NMAP_PATH)
 
 
-def scan_host(ip, ports="1-3389", arguments="-Pn -sV -T4 --min-rate 1000"):
+def scan_host(ip, ports="1-3389", profile="full", arguments=None):
+    """Scan a single host with the specified profile.
+
+    Args:
+        ip: IP address to scan
+        ports: Port range to scan (default: "1-3389")
+        profile: Scan profile to use - "quick" or "full" (default: "full")
+        arguments: Custom nmap arguments (overrides profile if provided)
+    """
     nm = _get_portscanner()
+    if arguments is None:
+        arguments = SCAN_PROFILES.get(profile, SCAN_PROFILES["full"])["arguments"]
     nm.scan(ip, ports, arguments=arguments)
     return nm[ip] if ip in nm.all_hosts() else None
 
-def scan_network(network, ports="1-3389", arguments="-Pn -sV -T4 --min-rate 1000"):
+def scan_network(network, ports="1-3389", profile="full", arguments=None):
+    """Scan a network with the specified profile.
+
+    Args:
+        network: Network range to scan
+        ports: Port range to scan (default: "1-3389")
+        profile: Scan profile to use - "quick" or "full" (default: "full")
+        arguments: Custom nmap arguments (overrides profile if provided)
+    """
     nm = _get_portscanner()
+    if arguments is None:
+        arguments = SCAN_PROFILES.get(profile, SCAN_PROFILES["full"])["arguments"]
     nm.scan(hosts=network, ports=ports, arguments=arguments)
     results = {}
     for host in nm.all_hosts():
@@ -61,7 +91,11 @@ def find_exploits(software: str, max_results: int = 5):
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
-        # searchsploit not installed on host
+        log.warning("searchsploit binary not found; exploit enrichment disabled")
+        return []
+
+    if res.returncode != 0:
+        log.warning("searchsploit returned non-zero status (%s) for query '%s'", res.returncode, software)
         return []
 
     if not res.stdout:
@@ -70,6 +104,7 @@ def find_exploits(software: str, max_results: int = 5):
     try:
         data = json.loads(res.stdout)
     except json.JSONDecodeError:
+        log.warning("Invalid JSON from searchsploit for query '%s'", software)
         return []
 
     results = data.get("RESULTS_EXPLOIT") or []
