@@ -1,24 +1,34 @@
 from scapy.all import get_if_list, get_if_addr, arping
 import ipaddress
 import os
-import sys
 import struct
 import fcntl
 import socket
+
+BLOCKED_IPS, BLOCKED_MACS = set(), set()
+
+
+def is_device_blocked(ip, mac):
+    """Check si un appareil est bloqué (raisons de sécurité et de confidentialité + optimisation)."""
+    return ip in BLOCKED_IPS or mac in BLOCKED_MACS
 
 
 def _is_root():
     return os.geteuid() == 0
 
 
+def detect_gateway_capability(ip):
+    return False
+
+
+def discover_remote_networks(gateway_ip):
+    return []
+
+
 def _get_netmask(ifname):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        result = fcntl.ioctl(
-            s.fileno(),
-            0x891B,  # SIOCGIFNETMASK
-            struct.pack('256s', ifname.encode('utf-8')[:15])
-        )
+        result = fcntl.ioctl(s.fileno(), 0x891B, struct.pack('256s', ifname.encode('utf-8')[:15]))
         s.close()
         return socket.inet_ntoa(result[20:24])
     except Exception:
@@ -26,8 +36,7 @@ def _get_netmask(ifname):
 
 
 def _get_interface_networks():
-    networks = {}
-    local_ips = set()
+    networks, local_ips = {}, set()
 
     for iface in get_if_list():
         try:
@@ -37,10 +46,7 @@ def _get_interface_networks():
 
             local_ips.add(ip)
             netmask = _get_netmask(iface)
-            if netmask and netmask != "0.0.0.0":
-                net = ipaddress.ip_network(f"{ip}/{netmask}", strict=False)
-            else:
-                net = ipaddress.ip_network(f"{ip}/24", strict=False)
+            net = ipaddress.ip_network(f"{ip}/{netmask if netmask and netmask != '0.0.0.0' else '24'}", strict=False)
 
             # ! à changer !
             if net.prefixlen < 8:
@@ -61,17 +67,15 @@ def _arp_scan(network, timeout=5, retry=2):
         return {}
 
     net = ipaddress.ip_network(str(network), strict=False)
-    if net.prefixlen <= 16:
-        timeout = max(timeout, 10)
-
+    timeout = max(timeout, 10) if net.prefixlen <= 16 else timeout
     hosts = {}
+
     for attempt in range(retry):
         try:
             ans, _ = arping(str(network), timeout=timeout, verbose=False)
             for snd, rcv in ans:
-                ip = rcv.psrc
-                if ip not in hosts:
-                    hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
+                if rcv.psrc not in hosts:
+                    hosts[rcv.psrc] = {"ip": rcv.psrc, "mac": rcv.hwsrc}
             if hosts:
                 break
         except PermissionError:
@@ -79,23 +83,20 @@ def _arp_scan(network, timeout=5, retry=2):
             break
         except Exception as e:
             print(f"  [ARP] Error (attempt {attempt + 1}): {e}")
-            continue
 
     return hosts
 
 
-
 def _do_discovery(network, timeout):
-    net = ipaddress.ip_network(str(network), strict=False)
-    arp_hosts = _arp_scan(net, timeout=timeout)
+    arp_hosts = _arp_scan(ipaddress.ip_network(str(network), strict=False), timeout=timeout)
 
     if not arp_hosts and not _is_root():
-        print(f"  [!] No hosts found. Run as root for ARP scan.")
+        print("  [!] No hosts found. Run as root for ARP scan.")
 
     return arp_hosts
 
 
-def discover_hosts(iface=None, network=None, timeout=5):
+def _discover_base(iface=None, network=None, timeout=5):
     if not _is_root():
         print("[!] Please run as root.")
         exit(1)
@@ -105,22 +106,60 @@ def discover_hosts(iface=None, network=None, timeout=5):
     if network:
         net = ipaddress.ip_network(network, strict=False)
         print(f"Scanning {net} ({net.num_addresses} hosts) ...")
-        merged = _do_discovery(net, timeout)
-        results[str(net)] = list(merged.values())
+        results[str(net)] = list(_do_discovery(net, timeout).values())
         return results, set()
 
     networks, local_ips = _get_interface_networks()
-    if not networks:
-        return results, local_ips
 
     for net_str, info in networks.items():
         if iface and info["iface"] != iface:
             continue
         net = info["network"]
-        label = f"{info['iface']} ({net_str})"
-        print(f"Scanning {label} ({net.num_addresses} hosts) ...")
-        merged = _do_discovery(net, timeout)
-        results[label] = list(merged.values())
+        print(f"Scanning {info['iface']} ({net_str}) ({net.num_addresses} hosts) ...")
+        results[f"{info['iface']} ({net_str})"] = list(_do_discovery(net, timeout).values())
+
+    return results, local_ips
+
+
+def discover_hosts(iface=None, network=None, timeout=5, max_depth=3, visited_networks=None):
+    if visited_networks is None:
+        visited_networks = set()
+
+    if max_depth <= 0:
+        return {}, set()
+
+    results, local_ips = _discover_base(iface, network, timeout)
+
+    for net_label, hosts in results.items():
+        for host in hosts:
+            ip, mac = host["ip"], host.get("mac", "")
+
+            if is_device_blocked(ip, mac):
+                print(f"  [SKIP] {ip} is blocked")
+                continue
+
+            if ip in local_ips:
+                continue
+
+            if detect_gateway_capability(ip):
+                print(f"  [GATEWAY] {ip} detected as potential gateway")
+
+                for remote_net in discover_remote_networks(ip):
+                    net_str = str(remote_net)
+
+                    if net_str in visited_networks:
+                        continue
+
+                    visited_networks.add(net_str)
+                    print(f"  [HOP] Scanning remote network {net_str} via {ip}")
+
+                    remote_results, _ = discover_hosts(
+                        network=net_str,
+                        timeout=timeout,
+                        max_depth=max_depth - 1,
+                        visited_networks=visited_networks
+                    )
+                    results.update(remote_results)
 
     return results, local_ips
 
@@ -132,33 +171,34 @@ def main(iface=None, network=None, timeout=5):
         print("No networks found or no hosts discovered.")
         return []
 
-    seen = set()
-    iplist = []
+    seen, iplist = set(), []
 
     for net, hosts in results.items():
         print(f"\nNetwork: {net}")
+
         if not hosts:
-            print(" No live hosts found.")
+            print("  No live hosts found.")
             continue
+
         for h in hosts:
             ip = h["ip"]
             if ip in local_ips:
                 print(f"  IP: {ip}\tMAC: {h['mac']}\t(self - skipped)")
-                continue
-            if ip in seen:
-                continue
-            seen.add(ip)
-            print(f"  IP: {ip}\tMAC: {h['mac']}")
-            iplist.append(ip)
+            elif ip not in seen:
+                seen.add(ip)
+                print(f"  IP: {ip}\tMAC: {h['mac']}")
+                iplist.append(ip)
 
     return iplist
 
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Discover hosts on local network(s)")
     parser.add_argument("-i", "--iface", help="Interface to scan (e.g. eth0)")
     parser.add_argument("-n", "--network", help="Network to scan (CIDR, e.g. 192.168.1.0/24)")
     parser.add_argument("-t", "--timeout", type=int, default=3, help="ARP timeout seconds")
+
     args = parser.parse_args()
     main(iface=args.iface, network=args.network, timeout=args.timeout)
