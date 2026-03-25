@@ -383,6 +383,11 @@ def generate_report(scan_results, output_path=None, duration=None, total_ports=3
     if output_path is None:
         output_path = f"rapports/Rapport_Audit_ReconEngine_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
 
+    # Create rapports directory if it doesn't exist
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
     data = build_report_data(scan_results, total_ports_scanned=total_ports)
     if duration:
         data["duration"] = duration
