@@ -10,11 +10,9 @@ import json
 log = logging.getLogger(__name__)
 
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
-# Prefer an explicit env var, then system `nmap`, then bundled path
 _BUNDLED_NMAP = os.path.join(SCRIPT_DIR, 'nmap', 'nmap')
 _ENV_NMAP = os.environ.get('NMAP_PATH')
 _SYSTEM_NMAP = shutil.which('nmap')
-# Build a tuple of candidate paths for python-nmap to search
 NMAP_PATH = tuple(p for p in (_ENV_NMAP, _SYSTEM_NMAP, _BUNDLED_NMAP) if p)
 
 # Scan profiles
@@ -93,7 +91,6 @@ def find_exploits(software: str, max_results: int = 5):
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
-        # searchsploit not installed on host
         log.warning("searchsploit binary not found; exploit enrichment disabled")
         return []
 
