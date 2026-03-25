@@ -5,10 +5,6 @@ import sys
 import struct
 import fcntl
 import socket
-import scan as scan_module
-
-# Nmap ping scan is only used on networks <= this size (ARP handles the rest)
-_NMAP_MAX_PREFIX = 24  # /24 = 256 hosts
 
 
 def _is_root():
@@ -16,7 +12,6 @@ def _is_root():
 
 
 def _get_netmask(ifname):
-    """Get the netmask of an interface using ioctl (Linux)."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         result = fcntl.ioctl(
@@ -31,10 +26,6 @@ def _get_netmask(ifname):
 
 
 def _get_interface_networks():
-    """Detect all local interfaces and their CIDR networks.
-
-    Returns (networks_dict, local_ips_set).
-    """
     networks = {}
     local_ips = set()
 
@@ -51,7 +42,7 @@ def _get_interface_networks():
             else:
                 net = ipaddress.ip_network(f"{ip}/24", strict=False)
 
-            # Skip absurdly large networks (> /8)
+            # ! à changer !
             if net.prefixlen < 8:
                 continue
 
@@ -65,13 +56,11 @@ def _get_interface_networks():
 
 
 def _arp_scan(network, timeout=5, retry=2):
-    """ARP scan with retry. Fast even on /16 since ARP is broadcast-based."""
     if not _is_root():
         print("  [ARP] Skipped — requires root.")
         return {}
 
     net = ipaddress.ip_network(str(network), strict=False)
-    # Increase timeout for large networks
     if net.prefixlen <= 16:
         timeout = max(timeout, 10)
 
@@ -84,7 +73,7 @@ def _arp_scan(network, timeout=5, retry=2):
                 if ip not in hosts:
                     hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
             if hosts:
-                break  # Got results, no need to retry
+                break
         except PermissionError:
             print("  [ARP] Requires root privileges.")
             break
@@ -95,72 +84,18 @@ def _arp_scan(network, timeout=5, retry=2):
     return hosts
 
 
-def _nmap_ping_scan(network, timeout=30):
-    """Use nmap -sn (ping sweep) as fallback discovery.
-
-    Uses nmap's native --host-timeout to prevent hanging.
-    """
-    try:
-        nm = scan_module._get_portscanner()
-        args = f"-sn -T4 --min-rate 500 --host-timeout {timeout}s"
-        nm.scan(hosts=str(network), arguments=args)
-        hosts = {}
-        for host in nm.all_hosts():
-            try:
-                state = nm[host].state()
-            except Exception:
-                state = "unknown"
-            if state == "up":
-                mac = ""
-                try:
-                    addresses = nm[host].get("addresses", {})
-                    mac = addresses.get("mac", "")
-                except Exception:
-                    pass
-                hosts[host] = {"ip": host, "mac": mac or "N/A"}
-        return hosts
-    except Exception as e:
-        print(f"  [NMAP] Error: {e}")
-        return {}
-
-
-def _should_use_nmap(network):
-    """Only use nmap ping scan on small networks (<= /24) to avoid hanging."""
-    net = ipaddress.ip_network(str(network), strict=False)
-    return net.prefixlen >= _NMAP_MAX_PREFIX
-
 
 def _do_discovery(network, timeout):
-    """Run ARP + optional nmap on a single network. Returns hosts dict."""
     net = ipaddress.ip_network(str(network), strict=False)
-    use_nmap = _should_use_nmap(net)
-
     arp_hosts = _arp_scan(net, timeout=timeout)
 
-    # Only use nmap on small networks, or as fallback if ARP found nothing on small nets
-    if use_nmap and not arp_hosts:
-        nmap_hosts = _nmap_ping_scan(net)
-    elif use_nmap:
-        nmap_hosts = _nmap_ping_scan(net)
-    else:
-        if not arp_hosts and not _is_root():
-            print(f"  [!] Network too large for nmap fallback. Run as root for ARP scan.")
-        nmap_hosts = {}
+    if not arp_hosts and not _is_root():
+        print(f"  [!] No hosts found. Run as root for ARP scan.")
 
-    merged = {**nmap_hosts, **arp_hosts}
-    return merged
+    return arp_hosts
 
 
 def discover_hosts(iface=None, network=None, timeout=5):
-    """
-    Discover live hosts on local networks.
-
-    Strategy:
-    - ARP scan: always (fast broadcast, works on any size network)
-    - Nmap ping sweep (-sn): only on small networks (<= /24)
-
-    Returns (results_dict, local_ips_set).
-    """
     if not _is_root():
         print("[!] Please run as root.")
         exit(1)
@@ -191,10 +126,6 @@ def discover_hosts(iface=None, network=None, timeout=5):
 
 
 def main(iface=None, network=None, timeout=5):
-    """
-    Entry point: discover hosts and return a deduplicated IP list.
-    Excludes the scanner's own IPs.
-    """
     results, local_ips = discover_hosts(iface=iface, network=network, timeout=timeout)
 
     if not results:
@@ -207,7 +138,7 @@ def main(iface=None, network=None, timeout=5):
     for net, hosts in results.items():
         print(f"\nNetwork: {net}")
         if not hosts:
-            print("  No live hosts found.")
+            print(" No live hosts found.")
             continue
         for h in hosts:
             ip = h["ip"]
