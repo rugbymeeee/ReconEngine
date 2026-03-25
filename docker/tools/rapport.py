@@ -366,20 +366,6 @@ def build_report_data(scan_results, total_ports_scanned=3389):
 
 
 def generate_report(scan_results, output_path=None, duration=None, total_ports=3389):
-    """
-    Generate a PDF report from scan results.
-
-    Parameters
-    ----------
-    scan_results : dict
-        ip -> nmap host data.
-    output_path : str or None
-        Where to write the PDF. Defaults to rapports/Rapport_Audit_ReconEngine.pdf in cwd.
-    duration : str or None
-        Human-readable scan duration.
-    total_ports : int
-        Number of ports scanned.
-    """
     if output_path is None:
         output_path = f"rapports/Rapport_Audit_ReconEngine_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
 
