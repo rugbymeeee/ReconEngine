@@ -9,3 +9,4 @@ _ast_deep.py
 _COMMUNITY_Report Generation.md
 .graphify_ast.json
 _COMMUNITY_Port Scanner & Profiles.md
+tests/__pycache__
