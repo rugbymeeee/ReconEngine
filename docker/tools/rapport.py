@@ -18,6 +18,7 @@ from ipaddress import AddressValueError, ip_address
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
+import cve as cve_mod
 import exploits as exploit_mod
 import scan as scan_mod
 
@@ -171,23 +172,47 @@ def _build_action_plan(hosts: list) -> list:
 
 # ── Fonctions internes ─────────────────────────────────────────────────────────
 
-def _classify(port: int, pinfo: dict, found_exploits: list) -> tuple[str, str]:
-    """Retourne (severity_class, severity_text) pour un port/service."""
+def _classify(
+    port: int,
+    pinfo: dict,
+    found_exploits: list,
+    cve_data: dict | None = None,
+) -> tuple[str, str]:
+    """
+    Retourne (severity_class, severity_text) pour un port/service.
+
+    Hiérarchie de classification :
+      1. Score CVSS réel (NVD / scripts nmap) — source la plus fiable
+      2. Exploit public searchsploit sans score CVSS → critical (exploitabilité prouvée)
+      3. Port critique ou service à risque élevé → high
+      4. Port < 1024 (service privilégié) → medium
+      5. Sinon → low
+    """
     name = (pinfo.get("name") or "").lower()
     state = pinfo.get("state", "")
 
+    if state not in ("open", "filtered"):
+        return "low", "FAIBLE"
+
+    # ── Priorité 1 : CVSS réel ───────────────────────────────────────────────
+    if cve_data and cve_data.get("max_cvss", 0.0) > 0.0:
+        sev_class, sev_text = cve_data["severity_class"], cve_data["severity_text"]
+        # Un exploit public connu ne peut pas abaisser la sévérité sous "high"
+        if found_exploits and sev_class not in ("critical", "high"):
+            return "high", "ELEVE"
+        return sev_class, sev_text
+
+    # ── Priorité 2 : exploit searchsploit sans score CVSS ───────────────────
+    if found_exploits:
+        return "critical", "CRITIQUE"
+
+    # ── Priorité 3 : heuristiques port/service ───────────────────────────────
     if state == "filtered":
-        if found_exploits:
-            return "critical", "CRITIQUE"
         if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
             return "high", "ELEVE"
         return "low", "FAIBLE"
 
-    if state != "open":
-        return "low", "FAIBLE"
-
-    if found_exploits:
-        return "critical", "CRITIQUE"
+    # state == "open"
     if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
         return "high", "ELEVE"
     if port < 1024:
@@ -287,10 +312,18 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
             else:
                 filtered_count += 1
 
+            product = (pinfo.get("product") or "").strip()
+            version = (pinfo.get("version") or "").strip()
+            script_data = pinfo.get("script", {}) if isinstance(pinfo.get("script"), dict) else {}
+
+            # Enrichissement CVE/CVSS (scripts nmap + NVD si disponible)
+            cve_data = cve_mod.get_cve_data(product, version, script_data, cache)
+
+            # Enrichissement exploit searchsploit (fallback / complément)
             query = _software_query(pinfo)
             found = exploit_mod.find(query, cache=cache)
 
-            sev_class, sev_text = _classify(port, pinfo, found)
+            sev_class, sev_text = _classify(port, pinfo, found, cve_data)
             sev_counts[sev_class] += 1
 
             svc = _format_service(pinfo)
@@ -307,9 +340,13 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
                 "exploit_count":  len(found),
                 "exploits":       [e.get("Title", "?") for e in found[:3]],
                 "recommendation": RECOMMENDATIONS[sev_class],
-                "product":        (pinfo.get("product") or "").strip(),
-                "version":        (pinfo.get("version") or "").strip(),
-                "desc":           svc,
+                "product":        product,
+                "version":        version,
+                "desc":           _format_service(pinfo),
+                # CVE/CVSS
+                "max_cvss":       cve_data["max_cvss"],
+                "cvss_source":    cve_data["source"],
+                "cve_list":       cve_data["cve_list"],
             })
 
     # Tri : ports ouverts d'abord, puis sévérité décroissante
