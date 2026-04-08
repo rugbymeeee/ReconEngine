@@ -1,58 +1,69 @@
-import os
-import sys
-import pathlib
-import time
+"""
+ReconEngine — point d'entrée principal.
+
+Pipeline en 4 phases :
+  1. Découverte des hôtes (ARP + nmap ping)
+  2. Scan parallèle des ports (ThreadPoolExecutor)
+  3. Affichage terminal des résultats (Rich)
+  4. Génération du rapport PDF (WeasyPrint)
+
+Usage :
+  python main.py [quick|full] [-t CIDR] [-i IFACE] [-o OUTPUT] [--ports PORTS]
+"""
+import argparse
 import logging
-import scan
-import discover
-import rapport
+import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.table import Table
 
+import config as cfg_mod
+import discover
+import exploits
+import rapport
+import scan
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
 log = logging.getLogger(__name__)
-SCAN_PORT_RANGE = os.environ.get("RECONENGINE_PORT_RANGE", "1-3389")
-SCAN_PROFILE = os.environ.get("RECONENGINE_SCAN_PROFILE", "full")
 
 
-def _estimate_scanned_port_count(port_range: str) -> int:
-    """Estimate scanned ports count from a simple nmap range expression."""
-    if not port_range:
-        return 3389
-
+def _port_count(port_spec: str) -> int:
+    """Compte le nombre de ports dans une expression nmap (ex: '22,80,1-1024')."""
     total = 0
-    for chunk in str(port_range).split(","):
-        value = chunk.strip()
-        if not value:
+    for chunk in port_spec.split(","):
+        chunk = chunk.strip()
+        if not chunk:
             continue
-        if "-" in value:
+        if "-" in chunk:
             try:
-                start_str, end_str = value.split("-", 1)
-                start = int(start_str)
-                end = int(end_str)
+                a, b = chunk.split("-", 1)
+                total += abs(int(b) - int(a)) + 1
             except ValueError:
-                log.warning("Invalid port range chunk '%s', fallback to default", value)
-                return 3389
-            if end < start:
-                start, end = end, start
-            total += (end - start) + 1
+                log.warning("Plage de ports invalide : '%s'", chunk)
         else:
             try:
-                int(value)
+                int(chunk)
+                total += 1
             except ValueError:
-                log.warning("Invalid port '%s', fallback to default", value)
-                return 3389
-            total += 1
-
-    return total if total > 0 else 3389
+                log.warning("Port invalide : '%s'", chunk)
+    return total or 1
 
 
-def render_scan_result(console: Console, ip: str, data):
-    console.rule(f"Scan results for {ip}")
-    try:
-        state = data.state()
-    except Exception:
-        state = "unknown"
+def render_host(console: Console, ip: str, data, cache: dict) -> None:
+    """Affiche les résultats d'un hôte dans le terminal."""
+    console.rule(f"[bold cyan]{ip}[/]")
+
+    os_str = scan.get_os(data)
+    if os_str:
+        console.print(f"  [dim]OS détecté :[/] {os_str}")
 
     try:
         protocols = data.all_protocols()
@@ -60,133 +71,181 @@ def render_scan_result(console: Console, ip: str, data):
         protocols = []
 
     if not protocols:
-        console.print("No open ports or protocols detected.")
+        console.print("  [yellow]Aucun port détecté.[/]")
         return
 
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Port", style="cyan", justify="right")
-    table.add_column("Protocol", style="green")
-    table.add_column("State", style="yellow")
-    table.add_column("Service", style="white")
-    table.add_column("Product/Version", style="dim")
-    table.add_column("Exploit(s)", style="red")
+    table = Table(show_header=True, header_style="bold blue", show_lines=False, expand=False)
+    table.add_column("Port",    style="cyan",       justify="right", width=7)
+    table.add_column("Proto",   style="dim",         width=6)
+    table.add_column("État",                         width=9)
+    table.add_column("Service",                      width=16)
+    table.add_column("Produit / Version", style="dim")
+    table.add_column("Exploits connus",  style="red", width=38)
 
-    def _format_service_version(pinfo: dict) -> str:
-        # Prefer explicit product+version, then extrainfo, then name
-        product = pinfo.get("product") or ""
-        version = pinfo.get("version") or ""
-        extrainfo = pinfo.get("extrainfo") or ""
-        # Combine product and version if available
-        if product or version:
-            s = " ".join(filter(None, [product.strip(), version.strip()])).strip()
-            if extrainfo:
-                # avoid duplication
-                if extrainfo not in s:
-                    s = f"{s} ({extrainfo})" if s else extrainfo
-            return s
-        if extrainfo:
-            return extrainfo
-        # Fallbacks
-        name = pinfo.get("name") or ""
-        servicefp = pinfo.get("servicefp") or ""
-        return " ".join(filter(None, [name, servicefp])).strip()
+    STATE_DISPLAY = {
+        "open":     "[green]ouvert[/]",
+        "filtered": "[yellow]filtré[/]",
+    }
+
+    def _service_str(pinfo: dict) -> str:
+        p = (pinfo.get("product") or "").strip()
+        v = (pinfo.get("version") or "").strip()
+        extra = (pinfo.get("extrainfo") or "").strip()
+        s = " ".join(filter(None, [p, v]))
+        if extra and extra not in s:
+            s = f"{s} ({extra})" if s else extra
+        return s or (pinfo.get("name") or "")
+
+    def _query(pinfo: dict) -> str:
+        p = (pinfo.get("product") or "").strip()
+        v = (pinfo.get("version") or "").strip()
+        return " ".join(filter(None, [p, v])) or (pinfo.get("name") or "")
 
     for proto in protocols:
-        ports = list(data[proto].keys())
-        for port in ports:
+        for port in sorted(data[proto].keys()):
             pinfo = data[proto][port]
-            st = pinfo.get("state", "")
-            name = pinfo.get("name", "")
-            prodver = _format_service_version(pinfo)
-            # Build a concise software query for searchsploit: prefer product+version, fallback to name
-            software_query = "".join(filter(None, [pinfo.get("product") or "", " ", pinfo.get("version") or ""]))
-            software_query = software_query.strip() or name
-            exploits = []
-            try:
-                exploits = scan.find_exploits(software_query)
-            except Exception:
-                exploits = []
-
-            if exploits:
-                exploit_summary = "| ".join(e.get("Title", "?") for e in exploits[:2])
-            else:
-                exploit_summary = ""
-
-            table.add_row(str(port), proto, st, name, prodver, exploit_summary)
+            state = pinfo.get("state", "")
+            if state not in ("open", "filtered"):
+                continue
+            query = _query(pinfo)
+            found = exploits.find(query, cache=cache) if query else []
+            exploit_str = " · ".join(e.get("Title", "?") for e in found[:2])
+            table.add_row(
+                str(port),
+                proto,
+                STATE_DISPLAY.get(state, state),
+                pinfo.get("name", ""),
+                _service_str(pinfo),
+                exploit_str,
+            )
 
     console.print(table)
 
 
-def main():
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="reconengine",
+        description="ReconEngine — Reconnaissance réseau et audit de sécurité",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Exemples :\n"
+            "  python main.py quick\n"
+            "  python main.py full -t 192.168.1.0/24\n"
+            "  python main.py -i eth0 --ports 22,80,443,8080\n"
+        ),
+    )
+    parser.add_argument(
+        "profile",
+        nargs="?",
+        choices=list(cfg_mod.SCAN_PROFILES.keys()),
+        default=None,
+        metavar="PROFILE",
+        help=f"Profil : {', '.join(cfg_mod.SCAN_PROFILES.keys())} (défaut : config ou 'full')",
+    )
+    parser.add_argument("-t", "--target",  metavar="CIDR",  help="Réseau ou IP cible (ex: 192.168.1.0/24)")
+    parser.add_argument("-i", "--iface",   metavar="IFACE", help="Interface réseau (ex: eth0)")
+    parser.add_argument("-o", "--output",  metavar="PATH",  help="Chemin du rapport PDF de sortie")
+    parser.add_argument("--ports",         metavar="PORTS", help="Ports à scanner (ex: 22,80,443 ou 1-1024)")
+    args = parser.parse_args()
+
+    cfg = cfg_mod.Config.load()
+    if args.profile:
+        cfg.scan.profile = args.profile
+    if args.ports:
+        cfg.scan.ports = args.ports
+
     console = Console()
+    profile_info = cfg_mod.SCAN_PROFILES.get(cfg.scan.profile, cfg_mod.SCAN_PROFILES["full"])
 
-    # Parse command-line arguments for scan profile
-    profile = SCAN_PROFILE
-    if len(sys.argv) > 1:
-        arg = sys.argv[1].lower()
-        if arg in ["quick", "fast", "rapide"]:
-            profile = "quick"
-        elif arg in ["full", "complete", "complet"]:
-            profile = "full"
-        elif arg in ["-h", "--help", "help"]:
-            console.print(Panel.fit(
-                "[bold]ReconEngine - Network Reconnaissance Tool[/]\n\n"
-                "[cyan]Usage:[/] python main.py [profile]\n\n"
-                "[yellow]Profils de scan disponibles:[/]\n"
-                "  • [green]quick[/] ou [green]rapide[/] - Scan rapide (détection basique des ports)\n"
-                "  • [green]full[/] ou [green]complet[/] - Scan complet (détection approfondie + vulnérabilités)\n\n"
-                "[cyan]Variables d'environnement:[/]\n"
-                "  • RECONENGINE_SCAN_PROFILE - Profil par défaut (quick/full)\n"
-                "  • RECONENGINE_PORT_RANGE - Ports à scanner (défaut: 1-3389)",
-                title="Aide",
-                border_style="blue"
-            ))
-            return
-
-    # Display scan profile info
-    profile_info = scan.SCAN_PROFILES.get(profile, scan.SCAN_PROFILES["full"])
+    ports_preview = cfg.scan.ports[:72] + ("…" if len(cfg.scan.ports) > 72 else "")
     console.print(Panel.fit(
-        f"[bold]Profil de scan:[/] [cyan]{profile}[/]\n"
+        f"[bold]ReconEngine[/]  ·  Profil : [cyan]{cfg.scan.profile}[/]\n"
         f"[dim]{profile_info['description']}[/]\n"
-        f"[yellow]Arguments:[/] {profile_info['arguments']}",
-        border_style="green"
+        f"[yellow]Ports :[/] {ports_preview}",
+        border_style="blue",
+        padding=(0, 1),
     ))
 
-    scan_results = {}
-    start_time = time.time()
-    try:
-        discovered_ips = discover.main()
-        if not discovered_ips:
-            console.print("No hosts discovered to scan.")
-            return
-        for ip in discovered_ips:
-            console.print(f"[bold blue]Scanning host:[/] {ip}")
-            try:
-                result = scan.scan_host(ip, ports=SCAN_PORT_RANGE, profile=profile)
-            except KeyboardInterrupt:
-                console.print(f"\n[yellow]Scan of {ip} interrupted, skipping.[/]")
-                break
-            if result:
-                render_scan_result(console, ip, result)
-                scan_results[ip] = result
-            else:
-                console.print(f"No results for {ip}")
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Interrupted.[/]")
+    # ── Phase 1 : Découverte ───────────────────────────────────────────────────
+    console.print("\n[bold]Phase 1[/] — Découverte des hôtes")
+    discovered_hosts = discover.discover(
+        iface=args.iface,
+        network=args.target,
+        timeout=cfg.scan.discovery_timeout,
+    )
+    ips = [h["ip"] for h in discovered_hosts]
 
-    elapsed = time.time() - start_time
-    minutes, seconds = divmod(int(elapsed), 60)
-    duration = f"{minutes} min {seconds}s"
+    if not ips:
+        console.print("[red]Aucun hôte découvert. Vérifiez les droits root et l'interface réseau.[/]")
+        sys.exit(0)
 
-    if scan_results:
-        console.print(f"\n[bold green]Generating PDF report...[/]")
-        scanned_ports = _estimate_scanned_port_count(SCAN_PORT_RANGE)
-        rapport.generate_report(scan_results, duration=duration, total_ports=scanned_ports)
-    else:
-        console.print("No scan results to report.")
+    console.print(f"[green]{len(ips)} hôte(s) découvert(s)[/] — lancement du scan...")
+
+    # ── Phase 2 : Scan parallèle ───────────────────────────────────────────────
+    exploit_cache: dict = {}
+    scan_results: dict = {}
+    start = time.monotonic()
+
+    console.print(
+        f"\n[bold]Phase 2[/] — Scan des ports "
+        f"([cyan]{cfg.scan.max_workers}[/] thread(s) parallèle(s))"
+    )
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold]{task.description}"),
+        BarColumn(bar_width=30),
+        TaskProgressColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task_id = progress.add_task("Scan en cours…", total=len(ips))
+
+        with ThreadPoolExecutor(max_workers=cfg.scan.max_workers) as executor:
+            futures = {
+                executor.submit(scan.scan_host, ip, cfg.scan.ports, cfg.scan.profile): ip
+                for ip in ips
+            }
+            for future in as_completed(futures):
+                ip = futures[future]
+                progress.advance(task_id)
+                try:
+                    result = future.result()
+                except Exception as e:
+                    log.error("Scan échoué pour %s : %s", ip, e)
+                    result = None
+                if result is not None:
+                    scan_results[ip] = result
+                else:
+                    log.warning("Aucun résultat pour %s", ip)
+
+    elapsed = time.monotonic() - start
+    m, s = divmod(int(elapsed), 60)
+    duration = f"{m} min {s}s"
+
+    # ── Phase 3 : Affichage terminal ───────────────────────────────────────────
+    console.print(f"\n[bold]Phase 3[/] — Résultats ({len(scan_results)} hôte(s) avec données)")
+    for ip, data in scan_results.items():
+        render_host(console, ip, data, exploit_cache)
+
+    if not scan_results:
+        console.print("[yellow]Aucun résultat à reporter.[/]")
+        sys.exit(0)
+
+    # ── Phase 4 : Rapport PDF ──────────────────────────────────────────────────
+    console.print(f"\n[bold]Phase 4[/] — Génération du rapport PDF")
+    n_ports = _port_count(cfg.scan.ports)
+    out = rapport.generate_report(
+        scan_results,
+        output_path=args.output,
+        duration=duration,
+        total_ports=n_ports,
+        cache=exploit_cache,
+        discovered_ips=discovered_hosts,
+    )
+    console.print(f"\n[bold green]✓ Rapport généré :[/] {out}")
+    console.print(f"[dim]Durée totale : {duration}[/]")
 
 
 if __name__ == "__main__":
     main()
-
-    

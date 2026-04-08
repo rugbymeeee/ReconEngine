@@ -1,28 +1,40 @@
-from scapy.all import get_if_list, get_if_addr, arping
-import ipaddress
-import os
-import sys
-import struct
+"""
+Découverte d'hôtes sur le réseau local.
+
+Stratégie :
+  1. ARP broadcast (Scapy) — rapide, fonctionne sur tout type de réseau, nécessite root.
+  2. nmap ping sweep (-sn) — utilisé en complément sur les petits réseaux (≤ /24)
+     ou comme seul moyen si root non disponible.
+
+Point d'entrée public : discover(iface, network, timeout) → list[str]
+"""
 import fcntl
+import ipaddress
+import logging
+import os
 import socket
-import scan as scan_module
+import struct
 
-# Nmap ping scan is only used on networks <= this size (ARP handles the rest)
-_NMAP_MAX_PREFIX = 24  # /24 = 256 hosts
+from scapy.all import arping, get_if_addr, get_if_list
+
+import scan
+
+log = logging.getLogger(__name__)
+
+_NMAP_MAX_PREFIX = 24  # nmap ping sweep uniquement sur réseaux ≤ /24
 
 
-def _is_root():
+def _is_root() -> bool:
     return os.geteuid() == 0
 
 
-def _get_netmask(ifname):
-    """Get the netmask of an interface using ioctl (Linux)."""
+def _get_netmask(ifname: str) -> str | None:
+    """Netmask via ioctl SIOCGIFNETMASK (Linux uniquement)."""
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         result = fcntl.ioctl(
-            s.fileno(),
-            0x891B,  # SIOCGIFNETMASK
-            struct.pack('256s', ifname.encode('utf-8')[:15])
+            s.fileno(), 0x891B,
+            struct.pack("256s", ifname.encode()[:15]),
         )
         s.close()
         return socket.inet_ntoa(result[20:24])
@@ -30,31 +42,24 @@ def _get_netmask(ifname):
         return None
 
 
-def _get_interface_networks():
-    """Detect all local interfaces and their CIDR networks.
-
-    Returns (networks_dict, local_ips_set).
-    """
-    networks = {}
-    local_ips = set()
+def _interface_networks() -> tuple[dict, set]:
+    """Énumère toutes les interfaces et retourne (réseaux, IPs_locales)."""
+    networks: dict = {}
+    local_ips: set = set()
 
     for iface in get_if_list():
         try:
             ip = get_if_addr(iface)
-            if not ip or ip.startswith("127.") or ip == "0.0.0.0":
+            if not ip or ip.startswith("127.") or ip.startswith("169.254.") or ip == "0.0.0.0":
                 continue
-
             local_ips.add(ip)
             netmask = _get_netmask(iface)
-            if netmask and netmask != "0.0.0.0":
-                net = ipaddress.ip_network(f"{ip}/{netmask}", strict=False)
-            else:
-                net = ipaddress.ip_network(f"{ip}/24", strict=False)
-
-            # Skip absurdly large networks (> /8)
-            if net.prefixlen < 8:
+            net = ipaddress.ip_network(
+                f"{ip}/{netmask}" if (netmask and netmask != "0.0.0.0") else f"{ip}/24",
+                strict=False,
+            )
+            if net.prefixlen < 8:  # ignore les réseaux absurdement larges
                 continue
-
             net_str = str(net)
             if net_str not in networks:
                 networks[net_str] = {"iface": iface, "network": net}
@@ -64,169 +69,141 @@ def _get_interface_networks():
     return networks, local_ips
 
 
-def _arp_scan(network, timeout=5, retry=2):
-    """ARP scan with retry. Fast even on /16 since ARP is broadcast-based."""
+def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 2) -> dict:
+    """ARP broadcast sur le réseau. Retourne {ip: {"ip": str, "mac": str}}."""
     if not _is_root():
-        print("  [ARP] Skipped — requires root.")
+        log.warning("[ARP] Ignoré — droits root requis.")
         return {}
+    if network.prefixlen <= 16:
+        timeout = max(timeout, 10)  # plus de temps sur grands réseaux
 
-    net = ipaddress.ip_network(str(network), strict=False)
-    # Increase timeout for large networks
-    if net.prefixlen <= 16:
-        timeout = max(timeout, 10)
-
-    hosts = {}
+    hosts: dict = {}
     for attempt in range(retry):
         try:
             ans, _ = arping(str(network), timeout=timeout, verbose=False)
-            for snd, rcv in ans:
+            for _, rcv in ans:
                 ip = rcv.psrc
                 if ip not in hosts:
                     hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
-            if hosts:
-                break  # Got results, no need to retry
         except PermissionError:
-            print("  [ARP] Requires root privileges.")
+            log.error("[ARP] Permission refusée (nécessite root).")
             break
         except Exception as e:
-            print(f"  [ARP] Error (attempt {attempt + 1}): {e}")
-            continue
-
+            log.warning("[ARP] Tentative %d/%d : %s", attempt + 1, retry, e)
     return hosts
 
 
-def _nmap_ping_scan(network, timeout=30):
-    """Use nmap -sn (ping sweep) as fallback discovery.
-
-    Uses nmap's native --host-timeout to prevent hanging.
-    """
+def _nmap_ping(network: ipaddress.IPv4Network, timeout: int = 30) -> dict:
+    """Ping sweep nmap (-sn). Retourne {ip: {"ip": str, "mac": str}}."""
     try:
-        nm = scan_module._get_portscanner()
-        args = f"-sn -T4 --min-rate 500 --host-timeout {timeout}s"
-        nm.scan(hosts=str(network), arguments=args)
-        hosts = {}
+        nm = scan._get_portscanner()
+        nm.scan(
+            hosts=str(network),
+            # -PE/-PP : sondes ICMP echo + timestamp (plus fiable que ping seul)
+            # -PS/-PA : SYN/ACK sur ports communs pour hôtes filtrant l'ICMP
+            arguments=f"-sn -T4 -PE -PP -PS22,80,443,8080 -PA80,443 --host-timeout {timeout}s",
+        )
+        hosts: dict = {}
         for host in nm.all_hosts():
             try:
                 state = nm[host].state()
             except Exception:
                 state = "unknown"
             if state == "up":
-                mac = ""
                 try:
-                    addresses = nm[host].get("addresses", {})
-                    mac = addresses.get("mac", "")
+                    mac = nm[host].get("addresses", {}).get("mac", "N/A")
                 except Exception:
-                    pass
+                    mac = "N/A"
                 hosts[host] = {"ip": host, "mac": mac or "N/A"}
         return hosts
     except Exception as e:
-        print(f"  [NMAP] Error: {e}")
+        log.error("[NMAP] Ping sweep échoué : %s", e)
         return {}
 
 
-def _should_use_nmap(network):
-    """Only use nmap ping scan on small networks (<= /24) to avoid hanging."""
-    net = ipaddress.ip_network(str(network), strict=False)
-    return net.prefixlen >= _NMAP_MAX_PREFIX
+def _discover_network(network: ipaddress.IPv4Network, timeout: int) -> dict:
+    """Lance ARP + éventuellement nmap ping sur un réseau. ARP est prioritaire."""
+    arp = _arp_scan(network, timeout=timeout)
+    nmap_hosts = (
+        _nmap_ping(network)
+        if network.prefixlen >= _NMAP_MAX_PREFIX
+        else {}
+    )
+    if not arp and not nmap_hosts and not _is_root():
+        log.warning(
+            "Réseau %s trop grand pour nmap et ARP désactivé (pas root).",
+            network,
+        )
+    # ARP écrase nmap si même IP trouvée (MAC plus fiable via ARP)
+    return {**nmap_hosts, **arp}
 
 
-def _do_discovery(network, timeout):
-    """Run ARP + optional nmap on a single network. Returns hosts dict."""
-    net = ipaddress.ip_network(str(network), strict=False)
-    use_nmap = _should_use_nmap(net)
-
-    arp_hosts = _arp_scan(net, timeout=timeout)
-
-    # Only use nmap on small networks, or as fallback if ARP found nothing on small nets
-    if use_nmap and not arp_hosts:
-        nmap_hosts = _nmap_ping_scan(net)
-    elif use_nmap:
-        nmap_hosts = _nmap_ping_scan(net)
-    else:
-        if not arp_hosts and not _is_root():
-            print(f"  [!] Network too large for nmap fallback. Run as root for ARP scan.")
-        nmap_hosts = {}
-
-    merged = {**nmap_hosts, **arp_hosts}
-    return merged
-
-
-def discover_hosts(iface=None, network=None, timeout=5):
+def discover(
+    iface: str | None = None,
+    network: str | None = None,
+    timeout: int = 5,
+) -> list[dict]:
     """
-    Discover live hosts on local networks.
+    Découverte des hôtes actifs. Retourne une liste de dicts ``{"ip": str, "mac": str}``
+    dédupliquée (les IPs propres à la machine sont exclues).
 
-    Strategy:
-    - ARP scan: always (fast broadcast, works on any size network)
-    - Nmap ping sweep (-sn): only on small networks (<= /24)
-
-    Returns (results_dict, local_ips_set).
+    Args:
+        iface:   Limite la découverte à une interface (ex: "eth0").
+        network: Force un réseau cible (CIDR, ex: "192.168.1.0/24").
+        timeout: Délai d'attente ARP en secondes.
     """
     if not _is_root():
-        print("[!] Running without root — ARP scan disabled, nmap used for small networks only.")
+        log.warning("Sans root — ARP désactivé, nmap limité aux réseaux ≤ /%d.", _NMAP_MAX_PREFIX)
 
-    results = {}
+    results: dict = {}
 
     if network:
         net = ipaddress.ip_network(network, strict=False)
-        print(f"Scanning {net} ({net.num_addresses} hosts) ...")
-        merged = _do_discovery(net, timeout)
-        results[str(net)] = list(merged.values())
-        return results, set()
+        log.info("Réseau cible : %s (%d hôtes possibles)", net, net.num_addresses)
+        results[str(net)] = list(_discover_network(net, timeout).values())
+        local_ips: set = set()
+    else:
+        networks, local_ips = _interface_networks()
+        if not networks:
+            log.warning("Aucune interface réseau utilisable détectée.")
+            return []
+        for net_str, info in networks.items():
+            if iface and info["iface"] != iface:
+                continue
+            net = info["network"]
+            label = f"{info['iface']} ({net_str})"
+            log.info("Découverte sur %s — %d hôtes possibles", label, net.num_addresses)
+            merged = _discover_network(net, timeout)
+            results[label] = list(merged.values())
 
-    networks, local_ips = _get_interface_networks()
-    if not networks:
-        return results, local_ips
+    seen: set = set()
+    host_list: list[dict] = []
 
-    for net_str, info in networks.items():
-        if iface and info["iface"] != iface:
-            continue
-        net = info["network"]
-        label = f"{info['iface']} ({net_str})"
-        print(f"Scanning {label} ({net.num_addresses} hosts) ...")
-        merged = _do_discovery(net, timeout)
-        results[label] = list(merged.values())
-
-    return results, local_ips
-
-
-def main(iface=None, network=None, timeout=5):
-    """
-    Entry point: discover hosts and return a deduplicated IP list.
-    Excludes the scanner's own IPs.
-    """
-    results, local_ips = discover_hosts(iface=iface, network=network, timeout=timeout)
-
-    if not results:
-        print("No networks found or no hosts discovered.")
-        return []
-
-    seen = set()
-    iplist = []
-
-    for net, hosts in results.items():
-        print(f"\nNetwork: {net}")
+    for label, hosts in results.items():
         if not hosts:
-            print("  No live hosts found.")
+            log.info("[%s] Aucun hôte actif détecté.", label)
             continue
         for h in hosts:
             ip = h["ip"]
-            if ip in local_ips:
-                print(f"  IP: {ip}\tMAC: {h['mac']}\t(self - skipped)")
-                continue
-            if ip in seen:
+            if ip in local_ips or ip in seen:
                 continue
             seen.add(ip)
-            print(f"  IP: {ip}\tMAC: {h['mac']}")
-            iplist.append(ip)
+            mac = h.get("mac", "N/A")
+            log.info("  ↳ %-16s  MAC: %s", ip, mac)
+            host_list.append({"ip": ip, "mac": mac})
 
-    return iplist
+    return host_list
 
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Discover hosts on local network(s)")
-    parser.add_argument("-i", "--iface", help="Interface to scan (e.g. eth0)")
-    parser.add_argument("-n", "--network", help="Network to scan (CIDR, e.g. 192.168.1.0/24)")
-    parser.add_argument("-t", "--timeout", type=int, default=3, help="ARP timeout seconds")
-    args = parser.parse_args()
-    main(iface=args.iface, network=args.network, timeout=args.timeout)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
+    p = argparse.ArgumentParser(description="Découverte d'hôtes réseau")
+    p.add_argument("-i", "--iface", help="Interface (ex: eth0)")
+    p.add_argument("-n", "--network", help="Réseau CIDR (ex: 192.168.1.0/24)")
+    p.add_argument("-t", "--timeout", type=int, default=5)
+    a = p.parse_args()
+    hosts = discover(iface=a.iface, network=a.network, timeout=a.timeout)
+    print(f"\n{len(hosts)} hôte(s) découvert(s) :")
+    for h in hosts:
+        print(f"  {h['ip']}  MAC: {h['mac']}")

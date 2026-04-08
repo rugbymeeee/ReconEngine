@@ -18,35 +18,27 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system packages required by the tools (including nmap)
-# Keep this step before switching to a non-privileged user so we have
-# permission to run apt-get.
+# System dependencies:
+#   nmap          — scanner de ports
+#   libpango*     — rendu de texte WeasyPrint (PDF)
+#   libgdk-pixbuf — images WeasyPrint
+#   shared-mime-info — détection MIME WeasyPrint
+#   libpcap-dev   — capture réseau Scapy (ARP)
+# Note: l'outil nécessite root pour ARP (Scapy) et nmap -sS (raw sockets).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nmap \
+    && apt-get install -y --no-install-recommends \
+        nmap \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libgdk-pixbuf-2.0-0 \
+        shared-mime-info \
+        libpcap-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-privileged user that the app will run under.
-# See https://docs.docker.com/go/dockerfile-user-best-practices/
-ARG UID=10001
-RUN adduser \
-    --disabled-password \
-    --gecos "" \
-    --home "/nonexistent" \
-    --shell "/sbin/nologin" \
-    --no-create-home \
-    --uid "${UID}" \
-    appuser
-
 # Download dependencies as a separate step to take advantage of Docker's caching.
-# Leverage a cache mount to /root/.cache/pip to speed up subsequent builds.
-# Leverage a bind mount to requirements.txt to avoid having to copy them into
-# into this layer.
 RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=bind,source=requirements.txt,target=requirements.txt \
     python -m pip install -r requirements.txt
-
-# Switch to the non-privileged user to run the application.
-USER appuser
 
 # Copy the source code into the container.
 COPY . .
@@ -55,4 +47,4 @@ COPY . .
 EXPOSE 8000
 
 # Run the application.
-CMD gunicorn", "--bind", "0.0.0.0:8000", "myapp.example:app"
+CMD ["python", "tools/main.py"]
