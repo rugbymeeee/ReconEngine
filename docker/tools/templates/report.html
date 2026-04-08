@@ -702,6 +702,54 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
 }
 
 .page-break { page-break-before: always; }
+
+/* ── Lignes de vulnérabilité colorées ─────────────────────────────────────── */
+tr.row-critical td { background: #fff5f5 !important; }
+tr.row-high     td { background: #fff8f1 !important; }
+tr.row-medium   td { background: #fffdf0 !important; }
+
+/* ── Mini-jauge hôte ──────────────────────────────────────────────────────── */
+.host-gauge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  position: relative;
+  margin-bottom: 4px;
+}
+.host-gauge-hole {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.host-gauge-score {
+  font-size: 10pt;
+  font-weight: 900;
+  color: #fff;
+  line-height: 1;
+}
+.host-gauge-unit { font-size: 6pt; color: rgba(255,255,255,0.7); }
+
+/* ── Exploit list ─────────────────────────────────────────────────────────── */
+.exploit-title {
+  font-size: 7.5pt;
+  color: var(--c-critical);
+  line-height: 1.4;
+  margin-bottom: 2px;
+}
+.exploit-title::before { content: "▸ "; }
+
+/* ── Metric bar inline ────────────────────────────────────────────────────── */
+.metric-bar-wrap { margin-top: 4px; background: rgba(0,0,0,0.08); border-radius: 2px; height: 4px; overflow: hidden; }
+.metric-bar-fill { height: 100%; border-radius: 2px; }
 </style>
 </head>
 <body>
@@ -760,6 +808,11 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
       <div><strong>Référence :</strong> {{ scan_id }}</div>
       {% if duration %}<div><strong>Durée du scan :</strong> {{ duration }}</div>{% endif %}
       <div><strong>Périmètre :</strong> {{ discovered_count }} hôte(s) sur le réseau</div>
+      {% if target_ips %}
+      <div style="margin-top:4px"><strong>IP(s) analysée(s) :</strong>
+        {% for ip in target_ips[:8] %}{{ ip }}{% if not loop.last %}, {% endif %}{% endfor %}{% if target_ips|length > 8 %} … (+{{ target_ips|length - 8 }}){% endif %}
+      </div>
+      {% endif %}
     </div>
     <div class="cv-confidential-bottom">
       DOCUMENT CONFIDENTIEL<br>
@@ -794,32 +847,53 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
   <h3>Synthèse exécutive</h3>
   <div class="summary-grid">
 
-    <!-- Jauge de risque global -->
+    <!-- Jauge de risque global (SVG — compatible WeasyPrint) -->
     <div class="gauge-wrap">
-      {% set gc = 'var(--c-critical)' if global_risk == 'CRITIQUE' else ('var(--c-high)' if global_risk == 'ELEVE' else ('var(--c-medium)' if global_risk == 'MODERE' else 'var(--c-low)')) %}
-      <div class="gauge-ring" style="background: conic-gradient({{ gc }} {{ risk_score }}%, #e2e8f0 {{ risk_score }}%);">
-        <div class="gauge-hole">
-          <span class="gauge-score" style="color:{{ gc }}">{{ risk_score }}</span>
-          <span class="gauge-unit">/100</span>
-        </div>
-      </div>
-      <div class="gauge-label" style="color:{{ gc }}">{{ global_risk }}</div>
+      {% set gc_hex = '#dc2626' if global_risk == 'CRITIQUE' else ('#ea580c' if global_risk == 'ELEVE' else ('#d97706' if global_risk == 'MODERE' else '#059669')) %}
+      {% set gauge_dash = (risk_score * 2.325) | round(1) %}
+      <svg width="100" height="100" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="37" fill="#f0f7ff" stroke="#e2e8f0" stroke-width="12"/>
+        <circle cx="50" cy="50" r="37" fill="none" stroke="{{ gc_hex }}" stroke-width="12"
+                stroke-dasharray="{{ gauge_dash }} 232.5"
+                stroke-linecap="round"
+                transform="rotate(-90 50 50)"/>
+        <text x="50" y="47" text-anchor="middle" font-size="17" font-weight="bold" fill="{{ gc_hex }}">{{ risk_score }}</text>
+        <text x="50" y="61" text-anchor="middle" font-size="8" fill="#475569">/100</text>
+      </svg>
+      <div class="gauge-label" style="color:{{ gc_hex }}">{{ global_risk }}</div>
     </div>
 
     <!-- KPI -->
     <table class="kpi-table">
-      <tr><td>Machines analysées</td>          <td>{{ host_count }}</td></tr>
-      <tr><td>Services exposés (ports ouverts)</td> <td>{{ open_ports_count }}</td></tr>
-      <tr><td>Ports protégés / fermés</td>     <td>{{ closed_ports_count }}</td></tr>
-      <tr><td>Hôtes à risque critique</td>     <td>{{ critical_hosts_count }} / {{ host_count }}</td></tr>
-      <tr><td>Vulnérabilités critiques</td>    <td>{{ critical_count }}</td></tr>
-      <tr><td>Total points de sécurité</td>    <td>{{ total_vulnerabilities }}</td></tr>
-      <tr><td>Serveurs détectés</td>           <td>{{ server_count }}</td></tr>
-      <tr><td>Postes de travail</td>           <td>{{ workstation_count }}</td></tr>
+      <tr><td>Machines analysées</td>              <td>{{ host_count }}</td></tr>
+      <tr><td>Services exposés (ports ouverts)</td><td>{{ open_ports_count }}</td></tr>
+      <tr><td>Ports filtrés</td>                   <td>{{ filtered_ports_count }}</td></tr>
+      <tr><td>Ports fermés</td>                    <td>{{ closed_ports_count }}</td></tr>
+      <tr><td>Hôtes à risque critique</td>         <td>{{ critical_hosts_count }} / {{ host_count }}</td></tr>
+      <tr><td>Vulnérabilités critiques</td>        <td>{{ critical_count }}</td></tr>
+      <tr><td>Total points de sécurité</td>        <td>{{ total_vulnerabilities }}</td></tr>
+      <tr><td>Serveurs détectés</td>               <td>{{ server_count }}</td></tr>
+      <tr><td>Postes de travail</td>               <td>{{ workstation_count }}</td></tr>
       {% if unreachable_count %}<tr><td>Hôtes hors ligne</td><td>{{ unreachable_count }}</td></tr>{% endif %}
-      <tr><td>Taux d'exposition global</td>    <td>{{ exposure_rate }}%</td></tr>
-      <tr><td>Score de discrétion réseau</td>  <td>{{ stealth_score }}%</td></tr>
-      <tr><td>Durée du scan</td>              <td>{{ duration if duration else '—' }}</td></tr>
+      <tr>
+        <td>Taux d'exposition réseau</td>
+        <td>
+          {{ exposure_rate }}%
+          <div class="metric-bar-wrap" style="width:60px;display:inline-block;vertical-align:middle;margin-left:4px">
+            <div class="metric-bar-fill" style="width:{{ exposure_rate }}%;background:{% if exposure_rate > 50 %}var(--c-critical){% elif exposure_rate > 25 %}var(--c-high){% else %}var(--c-low){% endif %}"></div>
+          </div>
+        </td>
+      </tr>
+      <tr>
+        <td>Score de furtivité</td>
+        <td>
+          {{ stealth_score }}%
+          <div class="metric-bar-wrap" style="width:60px;display:inline-block;vertical-align:middle;margin-left:4px">
+            <div class="metric-bar-fill" style="width:{{ stealth_score }}%;background:var(--c-low)"></div>
+          </div>
+        </td>
+      </tr>
+      <tr><td>Durée du scan</td>                   <td>{{ duration if duration else '—' }}</td></tr>
     </table>
 
     <!-- Graphique de répartition -->
@@ -903,8 +977,9 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
     <tr>
       <th style="width:5%">N°</th>
       <th style="width:10%">Priorité</th>
-      <th style="width:15%">Machine</th>
-      <th style="width:18%">Service / Port</th>
+      <th style="width:14%">Machine</th>
+      <th style="width:20%">Service / Port</th>
+      <th style="width:13%">Menace</th>
       <th>Action recommandée</th>
     </tr>
   </thead>
@@ -921,6 +996,13 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
         <div style="font-size:7.5pt;color:var(--ink-400)">Port {{ a.port }}</div>
         {% if a.has_exploits %}
         <div class="exploit-warning">⚠ Exploit public disponible</div>
+        {% endif %}
+      </td>
+      <td style="font-size:8pt">
+        {% if a.has_exploits %}
+        <span style="color:var(--c-critical);font-weight:700">⚠ Exploit public</span>
+        {% else %}
+        <span style="color:var(--ink-400)">—</span>
         {% endif %}
       </td>
       <td class="rec">{{ a.action }}</td>
@@ -1058,12 +1140,23 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
         {% if host.host_type == 'server' %}Serveur{% elif host.host_type == 'workstation' %}Poste de travail{% elif host.unreachable %}Machine hors ligne{% else %}Type inconnu{% endif %}
       </div>
     </div>
-    <div class="host-right">
+    <div class="host-right" style="display:flex;align-items:center;gap:12px">
       {% if not host.unreachable %}
-      <span class="badge {% if host.risk == 'CRITIQUE' %}critical{% elif host.risk == 'ELEVE' %}high{% elif host.risk == 'MODERE' %}medium{% else %}low{% endif %}"
-            style="font-size:9pt;padding:4px 10px">
-        {{ host.risk }} — {{ host.risk_score }}/100
-      </span>
+      {% set hgc = '#dc2626' if host.risk == 'CRITIQUE' else ('#ea580c' if host.risk == 'ELEVE' else ('#d97706' if host.risk == 'MODERE' else '#059669')) %}
+      {% set hdash = (host.risk_score * 1.257) | round(1) %}
+      <div style="text-align:center">
+        <!-- Mini-jauge SVG — compatible WeasyPrint -->
+        <svg width="56" height="56" viewBox="0 0 56 56">
+          <circle cx="28" cy="28" r="20" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.2)" stroke-width="8"/>
+          <circle cx="28" cy="28" r="20" fill="none" stroke="{{ hgc }}" stroke-width="8"
+                  stroke-dasharray="{{ hdash }} 125.7"
+                  stroke-linecap="round"
+                  transform="rotate(-90 28 28)"/>
+          <text x="28" y="25" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">{{ host.risk_score }}</text>
+          <text x="28" y="36" text-anchor="middle" font-size="6" fill="rgba(255,255,255,0.7)">/100</text>
+        </svg>
+        <div style="font-size:7pt;color:rgba(255,255,255,0.8);letter-spacing:1px;text-transform:uppercase">{{ host.risk }}</div>
+      </div>
       {% else %}
       <span class="badge unreachable" style="font-size:9pt;padding:4px 10px">HORS LIGNE</span>
       {% endif %}
@@ -1096,12 +1189,15 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
       <div class="stat-label">Critiques</div>
     </div>
     <div class="stat-card">
-      <div class="stat-val">{{ host.exposure_rate }}%</div>
+      <div class="stat-val" style="font-size:12pt">{{ host.exposure_rate }}%</div>
       <div class="stat-label">Taux d'exposition</div>
+      <div class="metric-bar-wrap" style="margin-top:5px">
+        <div class="metric-bar-fill" style="width:{{ host.exposure_rate }}%;background:{% if host.exposure_rate > 50 %}var(--c-critical){% elif host.exposure_rate > 25 %}var(--c-high){% else %}var(--c-low){% endif %}"></div>
+      </div>
     </div>
     <div class="stat-card">
       <div class="stat-val">{{ host.vulnerability_density }}</div>
-      <div class="stat-label">Risques / service</div>
+      <div class="stat-label">Risques/service</div>
     </div>
   </div>
 
@@ -1118,50 +1214,75 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
   <table>
     <thead>
       <tr>
-        <th style="width:7%">Port</th>
-        <th style="width:6%">Proto</th>
-        <th style="width:8%">État</th>
-        <th style="width:17%">Service</th>
-        <th style="width:10%">Risque</th>
-        <th style="width:22%">Menaces connues</th>
+        <th style="width:6%">Port</th>
+        <th style="width:5%">Proto</th>
+        <th style="width:7%">État</th>
+        <th style="width:16%">Service</th>
+        <th style="width:12%">Risque / CVSS</th>
+        <th style="width:24%">CVEs &amp; Exploits connus</th>
         <th style="width:30%">Action recommandée</th>
       </tr>
     </thead>
     <tbody>
       {% for v in host.vulnerabilities %}
-      <tr class="row-{{ v.severity_class }}">
+      <tr class="{% if v.severity_class == 'critical' %}row-critical{% elif v.severity_class == 'high' %}row-high{% elif v.severity_class == 'medium' %}row-medium{% endif %}">
         <td><strong>{{ v.port }}</strong></td>
-        <td>{{ v.protocol }}</td>
+        <td style="font-size:8pt;color:var(--ink-600)">{{ v.protocol }}</td>
         <td>
           <span class="badge {{ 'open' if v.state == 'open' else 'filtered' }}">
             {{ 'ouvert' if v.state == 'open' else 'filtré' }}
           </span>
         </td>
         <td>
-          {{ v.service }}
+          <strong style="font-size:9pt">{{ v.service }}</strong>
           {% if v.product or v.version %}
-          <div style="font-size:7.5pt;color:var(--ink-600);margin-top:1px">
+          <div style="font-size:7.5pt;color:var(--ink-600);margin-top:1px;font-family:monospace">
             {{ v.product }}{% if v.product and v.version %} {% endif %}{{ v.version }}
           </div>
           {% endif %}
         </td>
         <td>
           <span class="badge {{ v.severity_class }}">{{ v.severity_text }}</span>
+          {% if v.max_cvss %}
+          <div style="margin-top:4px">
+            <span style="
+              display:inline-block;
+              font-size:8.5pt;font-weight:900;
+              color:{% if v.max_cvss >= 9.0 %}var(--c-critical){% elif v.max_cvss >= 7.0 %}var(--c-high){% elif v.max_cvss >= 4.0 %}var(--c-medium){% else %}var(--c-low){% endif %};
+            ">{{ "%.1f"|format(v.max_cvss) }}</span>
+            <span style="font-size:7pt;color:var(--ink-400)"> /10
+              {% if v.cvss_source == 'nvd' %}· NVD{% elif v.cvss_source == 'nmap' %}· nmap{% elif v.cvss_source == 'mixed' %}· NVD+nmap{% endif %}
+            </span>
+          </div>
+          {% endif %}
           {% if v.exploit_count %}
-          <div style="font-size:7pt;color:var(--c-critical);margin-top:2px">
-            {{ v.exploit_count }} exploit(s) public(s)
+          <div style="font-size:7pt;color:var(--c-critical);font-weight:700;margin-top:2px">
+            ⚠ {{ v.exploit_count }} exploit(s)
           </div>
           {% endif %}
         </td>
         <td>
-          {% if v.exploits %}
-          <div class="exploit-list">
-            {% for e in v.exploits %}
-            <div>· {{ e[:65] }}{% if e|length > 65 %}…{% endif %}</div>
-            {% endfor %}
+          {% if v.cve_list %}
+          {% for cve in v.cve_list %}
+          <div style="margin-bottom:3px">
+            <span style="
+              font-size:7.5pt;font-weight:700;font-family:monospace;
+              color:{% if cve.cvss >= 9.0 %}var(--c-critical){% elif cve.cvss >= 7.0 %}var(--c-high){% elif cve.cvss >= 4.0 %}var(--c-medium){% else %}var(--c-low){% endif %};
+            ">{{ cve.cve_id }}</span>
+            <span style="font-size:7pt;color:var(--ink-400)"> {{ "%.1f"|format(cve.cvss) }}</span>
+            {% if cve.description %}
+            <div style="font-size:6.5pt;color:var(--ink-600);line-height:1.3;margin-top:1px">
+              {{ cve.description[:90] }}{% if cve.description|length > 90 %}…{% endif %}
+            </div>
+            {% endif %}
           </div>
+          {% endfor %}
+          {% elif v.exploits %}
+          {% for ex in v.exploits %}
+          <div class="exploit-title">{{ ex[:60] }}{% if ex|length > 60 %}…{% endif %}</div>
+          {% endfor %}
           {% else %}
-          <div class="no-exploit">Aucun exploit répertorié</div>
+          <div class="no-exploit">Aucun CVE répertorié</div>
           {% endif %}
         </td>
         <td class="rec">{{ v.recommendation }}</td>

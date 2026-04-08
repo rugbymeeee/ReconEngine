@@ -99,6 +99,7 @@ def render_host(console: Console, ip: str, data, cache: dict, mac: str = "N/A") 
     table.add_column("Produit / Version", style="dim")
     table.add_column("Exploits connus",  style="red", width=38)
 
+    rows = 0
     for proto in protocols:
         for port in sorted(data[proto].keys()):
             pinfo = data[proto][port]
@@ -116,6 +117,11 @@ def render_host(console: Console, ip: str, data, cache: dict, mac: str = "N/A") 
                 _service_str(pinfo),
                 exploit_str,
             )
+            rows += 1
+
+    if rows == 0:
+        console.print("  [yellow]Aucun port ouvert ou filtré détecté.[/]")
+        return
 
     console.print(table)
 
@@ -146,7 +152,12 @@ def main() -> None:
     parser.add_argument("--ports",         metavar="PORTS", help="Ports à scanner (ex: 22,80,443 ou 1-1024)")
     parser.add_argument("--workers",       metavar="N",     type=int, help="Threads parallèles (défaut : 8)")
     parser.add_argument("--timeout",       metavar="SEC",   type=int, help="Délai découverte ARP en secondes (défaut : 5)")
+    parser.add_argument("--no-pdf",        action="store_true", help="Affiche les résultats terminal uniquement, sans générer de PDF")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Affiche les messages de débogage (logging DEBUG)")
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     cfg = cfg_mod.Config.load()
     if args.profile:
@@ -228,13 +239,29 @@ def main() -> None:
     duration = f"{m} min {s}s"
 
     # ── Phase 3 : Affichage terminal ───────────────────────────────────────────
-    console.print(f"\n[bold]Phase 3[/] — Résultats ({len(scan_results)} hôte(s) avec données)")
     mac_by_ip = {h["ip"]: h.get("mac", "N/A") for h in discovered_hosts}
+    unreachable_ips = [h["ip"] for h in discovered_hosts if h["ip"] not in scan_results]
+    console.print(
+        f"\n[bold]Phase 3[/] — Résultats "
+        f"([cyan]{len(scan_results)}[/] scanné(s), "
+        f"[yellow]{len(unreachable_ips)}[/] inaccessible(s))"
+    )
     for ip, data in scan_results.items():
         render_host(console, ip, data, exploit_cache, mac=mac_by_ip.get(ip, "N/A"))
 
+    if unreachable_ips:
+        console.rule("[dim]Hôtes inaccessibles (ARP découvert, scan échoué)[/]")
+        for ip in unreachable_ips:
+            console.print(f"  [dim]⊘ {ip}[/]  [red]aucune réponse au scan TCP[/]")
+
     if not scan_results:
         console.print("[yellow]Aucun résultat à reporter.[/]")
+        sys.exit(0)
+
+    console.print(f"[dim]Durée totale : {duration}[/]")
+
+    if args.no_pdf:
+        console.print("[dim]Option --no-pdf : génération du rapport PDF ignorée.[/]")
         sys.exit(0)
 
     # ── Phase 4 : Rapport PDF ──────────────────────────────────────────────────
@@ -252,7 +279,6 @@ def main() -> None:
         discovered_ips=discovered_hosts,
     )
     console.print(f"\n[bold green]✓ Rapport généré :[/] {out}")
-    console.print(f"[dim]Durée totale : {duration}[/]")
 
 
 if __name__ == "__main__":

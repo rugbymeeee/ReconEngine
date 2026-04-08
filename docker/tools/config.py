@@ -51,10 +51,10 @@ SCAN_PROFILES: dict[str, dict] = {
     },
     "full": {
         "description": "Scan complet — services, OS et scripts de vulnérabilité (CVSSv2 ≥ 5.0)",
-        # -Pn              : hôtes pré-confirmés
-        # --max-retries 1  : réduit le temps sur ports filtrés/closed
-        # --host-timeout   : évite qu'un hôte bloque un thread indéfiniment
-        "arguments": "-sS -sV -O --script vuln,default --script-args mincvss=5.0 -T4 -Pn --host-timeout 300s --max-retries 1",
+        # -Pn            : hôtes pré-confirmés, pas besoin de re-ping
+        # --host-timeout : évite qu'un hôte bloque un thread indéfiniment
+        # --max-retries  : retry sur perte de paquets (WiFi, réseaux bruyants)
+        "arguments": "-sS -sV -O --script vuln,default --script-args mincvss=5.0 -T4 -Pn --host-timeout 300s --max-retries 3",
     },
 }
 
@@ -99,6 +99,16 @@ class Config:
             cfg.scan.profile = v
         if v := os.environ.get("RECONENGINE_OUTPUT_DIR"):
             cfg.output_dir = v
+        if v := os.environ.get("RECONENGINE_MAX_WORKERS"):
+            try:
+                cfg.scan.max_workers = int(v)
+            except ValueError:
+                pass
+        if v := os.environ.get("RECONENGINE_DISCOVERY_TIMEOUT"):
+            try:
+                cfg.scan.discovery_timeout = int(v)
+            except ValueError:
+                pass
 
         if cfg.scan.profile not in SCAN_PROFILES:
             raise ValueError(

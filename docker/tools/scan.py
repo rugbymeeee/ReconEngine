@@ -44,6 +44,12 @@ def scan_host(
     """
     Scanne un hôte et retourne son HostDict nmap, ou None si inaccessible.
 
+    Stratégie :
+      1. Scan principal avec le profil demandé.
+      2. Si aucun résultat (hôte absent de all_hosts), retry avec le profil quick
+         pour récupérer au moins les ports ouverts (évite de perdre des hôtes
+         dont nmap timeout sur les scripts vuln mais qui ont des ports ouverts).
+
     Args:
         ip:        Adresse IP cible.
         ports:     Ports à scanner (format nmap : "22,80,443" ou "1-1024").
@@ -57,8 +63,24 @@ def scan_host(
     except Exception as e:
         log.error("Scan échoué pour %s : %s", ip, e)
         return None
-    hosts = nm.all_hosts()
-    return nm[ip] if ip in hosts else None
+    if ip in nm.all_hosts():
+        return nm[ip]
+
+    # Retry avec profil quick si le scan complet n'a rien renvoyé
+    # (timeout hôte, filtrage strict, hôte sur VLAN distant…)
+    if profile == "full" and not arguments:
+        log.warning(
+            "Scan full sans résultat pour %s — retry profil quick (ports ouverts seulement)", ip
+        )
+        nm2 = _get_portscanner()
+        try:
+            nm2.scan(ip, ports, arguments=SCAN_PROFILES["quick"]["arguments"])
+        except Exception as e:
+            log.error("Retry scan échoué pour %s : %s", ip, e)
+            return None
+        return nm2[ip] if ip in nm2.all_hosts() else None
+
+    return None
 
 
 def get_os(data) -> str:

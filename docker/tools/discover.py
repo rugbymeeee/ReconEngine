@@ -87,8 +87,12 @@ def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5) -> dict:
     if not _is_root():
         log.warning("[ARP] Ignoré — droits root requis.")
         return {}
+    # Sur les grands réseaux WiFi, les paquets ARP transitent via l'AP et les
+    # délais de réponse sont plus élevés qu'en filaire — augmenter le timeout.
     if network.prefixlen <= 16:
-        timeout = max(timeout, 10)  # plus de temps sur grands réseaux
+        timeout = max(timeout, 30)   # /16 = 65536 hôtes, WiFi latency
+    elif network.prefixlen <= 20:
+        timeout = max(timeout, 15)   # /17–/20
 
     hosts: dict = {}
     try:
