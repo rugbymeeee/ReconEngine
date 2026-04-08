@@ -1,7 +1,6 @@
 """
 Tests for cve.py — pure logic, no network calls.
 """
-import pytest
 
 
 # ── cvss_to_severity ───────────────────────────────────────────────────────────

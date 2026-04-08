@@ -4,8 +4,8 @@ Shared pytest fixtures and path setup.
 All tests in this suite cover pure Python logic — no network access,
 no nmap, no searchsploit required.
 """
-import sys
 import pathlib
+import sys
 
 # Add docker/tools to sys.path so tests can import the modules directly.
 TOOLS_DIR = pathlib.Path(__file__).parent.parent / "docker" / "tools"

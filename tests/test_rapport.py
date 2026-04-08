@@ -2,13 +2,12 @@
 Tests for rapport.py — classification, scoring, and host-type logic.
 No network, no nmap, no WeasyPrint rendering.
 """
-import pytest
 
 
 # ── _classify ──────────────────────────────────────────────────────────────────
 
 def test_classify_critical_port_open():
-    from rapport import _classify, CRITICAL_PORTS
+    from rapport import CRITICAL_PORTS, _classify
     port = next(iter(CRITICAL_PORTS))  # pick any critical port
     pinfo = {"state": "open", "name": "ftp"}
     sev_class, sev_text = _classify(port, pinfo, [], None)
