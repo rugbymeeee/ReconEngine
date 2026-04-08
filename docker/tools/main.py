@@ -17,16 +17,15 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from rich.console import Console
-from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
-from rich.table import Table
-
 import config as cfg_mod
 import discover
 import exploits
 import rapport
 import scan
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.table import Table
 
 logging.basicConfig(
     level=logging.INFO,
@@ -265,7 +264,7 @@ def main() -> None:
         sys.exit(0)
 
     # ── Phase 4 : Rapport PDF ──────────────────────────────────────────────────
-    console.print(f"\n[bold]Phase 4[/] — Génération du rapport PDF")
+    console.print("\n[bold]Phase 4[/] — Génération du rapport PDF")
     n_ports = _port_count(cfg.scan.ports)
     output_path = args.output or (
         f"{cfg.output_dir}/Rapport_Audit_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"

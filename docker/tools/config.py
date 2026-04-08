@@ -1,11 +1,17 @@
 """
 Configuration centralisée de ReconEngine.
 Chargée depuis un fichier TOML (RECONENGINE_CONFIG) et/ou des variables d'environnement.
+Env vars ont toujours la priorité sur le fichier TOML.
 """
+import contextlib
+import logging
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # ── Liste de ports prioritaires ────────────────────────────────────────────────
 # Couvre les services les plus exposés en environnement réseau typique.
@@ -58,6 +64,49 @@ SCAN_PROFILES: dict[str, dict] = {
     },
 }
 
+# ── Validation helpers ─────────────────────────────────────────────────────────
+_PORT_SPEC_RE = re.compile(r"^(\d+(-\d+)?)(,\d+(-\d+)?)*$")
+
+
+def _validate_ports(ports: str) -> str:
+    """Valide une expression de ports nmap et retourne la valeur nettoyée."""
+    ports = ports.strip()
+    if not ports:
+        return DEFAULT_PORTS
+    if not _PORT_SPEC_RE.match(ports):
+        raise ValueError(
+            f"Expression de ports invalide : '{ports}'. "
+            "Format attendu : '22,80,443' ou '1-1024' ou '22,80,1000-2000'."
+        )
+    # Check individual port numbers are in [1, 65535]
+    for chunk in ports.split(","):
+        parts = chunk.split("-")
+        for p in parts:
+            n = int(p)
+            if not 1 <= n <= 65535:
+                raise ValueError(f"Port {n} hors de la plage valide [1, 65535].")
+    return ports
+
+
+def _validate_profile(profile: str) -> str:
+    profile = profile.strip().lower()
+    if profile not in SCAN_PROFILES:
+        valid = ", ".join(SCAN_PROFILES.keys())
+        raise ValueError(f"Profil inconnu : '{profile}'. Valeurs valides : {valid}.")
+    return profile
+
+
+def _validate_workers(value: int) -> int:
+    if value < 1 or value > 64:
+        raise ValueError(f"max_workers doit être entre 1 et 64 (reçu : {value}).")
+    return value
+
+
+def _validate_timeout(value: int) -> int:
+    if value < 1 or value > 300:
+        raise ValueError(f"discovery_timeout doit être entre 1 et 300 secondes (reçu : {value}).")
+    return value
+
 
 @dataclass
 class ScanConfig:
@@ -80,35 +129,51 @@ class Config:
         if config_path:
             p = Path(config_path)
             if p.exists():
-                with open(p, "rb") as f:
-                    data = tomllib.load(f)
-                s = data.get("scan", {})
-                for attr in ("ports", "profile"):
-                    if attr in s:
-                        setattr(cfg.scan, attr, str(s[attr]))
-                for attr in ("discovery_timeout", "max_workers"):
-                    if attr in s:
-                        setattr(cfg.scan, attr, int(s[attr]))
-                if "output_dir" in data:
-                    cfg.output_dir = str(data["output_dir"])
+                try:
+                    with open(p, "rb") as f:
+                        data = tomllib.load(f)
+                    s = data.get("scan", {})
+                    if "ports" in s:
+                        cfg.scan.ports = _validate_ports(str(s["ports"]))
+                    if "profile" in s:
+                        cfg.scan.profile = _validate_profile(str(s["profile"]))
+                    if "max_workers" in s:
+                        cfg.scan.max_workers = _validate_workers(int(s["max_workers"]))
+                    if "discovery_timeout" in s:
+                        cfg.scan.discovery_timeout = _validate_timeout(int(s["discovery_timeout"]))
+                    if "output_dir" in data:
+                        cfg.output_dir = str(data["output_dir"])
+                except (ValueError, KeyError, TypeError) as e:
+                    log.error("Erreur de configuration dans '%s' : %s", config_path, e)
+                    raise SystemExit(1) from e
+            else:
+                log.warning("Fichier de configuration introuvable : %s", config_path)
 
-        # Variables d'environnement — priorité absolue
+        # ── Variables d'environnement (priorité absolue) ───────────────────────
         if v := os.environ.get("RECONENGINE_PORTS"):
-            cfg.scan.ports = v
+            try:
+                cfg.scan.ports = _validate_ports(v)
+            except ValueError as e:
+                log.error("RECONENGINE_PORTS invalide : %s", e)
+                raise SystemExit(1) from e
+
         if v := os.environ.get("RECONENGINE_PROFILE"):
-            cfg.scan.profile = v
+            try:
+                cfg.scan.profile = _validate_profile(v)
+            except ValueError as e:
+                log.error("RECONENGINE_PROFILE invalide : %s", e)
+                raise SystemExit(1) from e
+
         if v := os.environ.get("RECONENGINE_OUTPUT_DIR"):
             cfg.output_dir = v
+
         if v := os.environ.get("RECONENGINE_MAX_WORKERS"):
-            try:
-                cfg.scan.max_workers = int(v)
-            except ValueError:
-                pass
+            with contextlib.suppress(ValueError):
+                cfg.scan.max_workers = _validate_workers(int(v))
+
         if v := os.environ.get("RECONENGINE_DISCOVERY_TIMEOUT"):
-            try:
-                cfg.scan.discovery_timeout = int(v)
-            except ValueError:
-                pass
+            with contextlib.suppress(ValueError):
+                cfg.scan.discovery_timeout = _validate_timeout(int(v))
 
         if cfg.scan.profile not in SCAN_PROFILES:
             raise ValueError(

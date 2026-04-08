@@ -19,15 +19,17 @@ Run:
   sudo python tools/api.py                 # default: 0.0.0.0:8000
   sudo uvicorn tools.api:app --host 0.0.0.0 --port 8000
 """
+import contextlib
 import datetime
 import logging
 import os
 import pathlib
+import sqlite3
 import sys
 import threading
 import time
 import uuid
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
@@ -39,10 +41,10 @@ _THIS_DIR = pathlib.Path(__file__).parent.resolve()
 if str(_THIS_DIR) not in sys.path:
     sys.path.insert(0, str(_THIS_DIR))
 
-import config as cfg_mod
-import discover
-import rapport
-import scan
+import config as cfg_mod  # noqa: E402
+import discover  # noqa: E402
+import rapport  # noqa: E402
+import scan  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,23 +70,120 @@ def _require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
 AuthDep = Annotated[None, Depends(_require_api_key)]
 
 # ── Application ────────────────────────────────────────────────────────────────
+
+@contextlib.asynccontextmanager
+async def _lifespan(application: FastAPI):  # noqa: ARG001
+    """Initialize DB on startup; mark orphaned running scans as error."""
+    _db_init()
+    with _db_connect() as conn:
+        orphans = conn.execute(
+            "SELECT scan_id FROM scans WHERE status = ?", (ScanStatus.RUNNING,)
+        ).fetchall()
+    for row in orphans:
+        _db_update(
+            row["scan_id"],
+            status=ScanStatus.ERROR,
+            finished_at=datetime.datetime.now().isoformat(),
+            error="Process restarted while scan was running",
+        )
+        log.warning("Marked orphaned scan %s as error", row["scan_id"])
+    yield  # application runs here
+
+
 app = FastAPI(
     title="ReconEngine API",
     description="Remote control for the ReconEngine network audit pipeline.",
     version="0.1.0",
     contact={"name": "ReconEngine"},
+    lifespan=_lifespan,
 )
 
-# ── In-memory scan registry (sufficient for single-device embedded use) ────────
-class ScanStatus(str, Enum):
+
+class ScanStatus(StrEnum):
     PENDING   = "pending"
     RUNNING   = "running"
     DONE      = "done"
     ERROR     = "error"
 
 
-_scans: dict[str, dict[str, Any]] = {}
-_scans_lock = threading.Lock()
+# ── SQLite-backed scan registry ────────────────────────────────────────────────
+# Persists across container restarts. Stored alongside the PDF reports so the
+# same volume mount covers both.
+_DB_PATH = pathlib.Path(os.environ.get("RECONENGINE_OUTPUT_DIR", "rapports")) / "scans.db"
+_db_lock = threading.Lock()  # sqlite3 in WAL mode is thread-safe but we serialize writes
+
+
+def _db_connect() -> sqlite3.Connection:
+    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def _db_init() -> None:
+    with _db_lock, _db_connect() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS scans (
+                scan_id      TEXT PRIMARY KEY,
+                status       TEXT NOT NULL,
+                profile      TEXT NOT NULL,
+                started_at   TEXT NOT NULL,
+                finished_at  TEXT,
+                duration     TEXT,
+                hosts_found  INTEGER DEFAULT 0,
+                hosts_scanned INTEGER DEFAULT 0,
+                report_file  TEXT,
+                error        TEXT
+            )
+        """)
+        conn.commit()
+
+
+def _db_insert(entry: dict[str, Any]) -> None:
+    with _db_lock, _db_connect() as conn:
+        conn.execute(
+            """INSERT INTO scans
+               (scan_id, status, profile, started_at, finished_at, duration,
+                hosts_found, hosts_scanned, report_file, error)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                entry["scan_id"], entry["status"], entry["profile"],
+                entry["started_at"], entry.get("finished_at"), entry.get("duration"),
+                entry.get("hosts_found", 0), entry.get("hosts_scanned", 0),
+                entry.get("report_file"), entry.get("error"),
+            ),
+        )
+        conn.commit()
+
+
+def _db_update(scan_id: str, **kwargs: Any) -> None:
+    if not kwargs:
+        return
+    cols = ", ".join(f"{k} = ?" for k in kwargs)
+    vals = list(kwargs.values()) + [scan_id]
+    with _db_lock, _db_connect() as conn:
+        conn.execute(f"UPDATE scans SET {cols} WHERE scan_id = ?", vals)  # noqa: S608
+        conn.commit()
+
+
+def _db_get(scan_id: str) -> dict[str, Any] | None:
+    with _db_connect() as conn:
+        row = conn.execute("SELECT * FROM scans WHERE scan_id = ?", (scan_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _db_list() -> list[dict[str, Any]]:
+    with _db_connect() as conn:
+        rows = conn.execute("SELECT * FROM scans ORDER BY started_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── In-memory "running" state (DB stores persistent state) ────────────────────
+# We keep an in-memory dict only to track the "running" status in real-time,
+# since the DB update for hosts_scanned would otherwise hammer disk.
+_running: dict[str, dict[str, Any]] = {}
+_running_lock = threading.Lock()
 
 
 # ── Pydantic models ────────────────────────────────────────────────────────────
@@ -137,13 +236,19 @@ class ReportEntry(BaseModel):
 
 def _run_scan(scan_id: str, req: ScanRequest) -> None:
     """Executes the full ReconEngine pipeline in a background thread."""
-    import exploits
 
-    def _update(**kwargs: Any) -> None:
-        with _scans_lock:
-            _scans[scan_id].update(kwargs)
+    def _live(**kwargs: Any) -> None:
+        """Update live (in-memory) state visible during the scan."""
+        with _running_lock:
+            if scan_id in _running:
+                _running[scan_id].update(kwargs)
 
-    _update(status=ScanStatus.RUNNING)
+    def _persist(**kwargs: Any) -> None:
+        """Persist state to SQLite (called at milestones and completion)."""
+        _db_update(scan_id, **kwargs)
+        _live(**kwargs)
+
+    _persist(status=ScanStatus.RUNNING)
     log.info("[%s] Scan started (profile=%s)", scan_id, req.profile)
 
     try:
@@ -159,16 +264,17 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             timeout=cfg.scan.discovery_timeout,
         )
         ips = [h["ip"] for h in discovered]
-        _update(hosts_found=len(ips))
+        _persist(hosts_found=len(ips))
         log.info("[%s] Discovered %d host(s)", scan_id, len(ips))
 
         if not ips:
-            _update(
+            _persist(
                 status=ScanStatus.DONE,
                 finished_at=datetime.datetime.now().isoformat(),
                 duration="0s",
-                hosts_scanned=0,
             )
+            with _running_lock:
+                _running.pop(scan_id, None)
             return
 
         # ── Phase 2: Parallel scan ─────────────────────────────────────────────
@@ -192,23 +298,16 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                     result = None
                 if result is not None:
                     scan_results[ip] = result
-                _update(hosts_scanned=len(scan_results))
+                # Live update only (not every result to DB — too noisy on disk)
+                _live(hosts_scanned=len(scan_results))
 
         elapsed = time.monotonic() - t0
         m, s = divmod(int(elapsed), 60)
         duration = f"{m}m{s:02d}s"
 
-        if not scan_results:
-            _update(
-                status=ScanStatus.DONE,
-                finished_at=datetime.datetime.now().isoformat(),
-                duration=duration,
-            )
-            return
-
         # ── Phase 3 (optional): PDF report ────────────────────────────────────
         report_file = None
-        if not req.no_pdf:
+        if scan_results and not req.no_pdf:
             import main as main_mod
             n_ports = main_mod._port_count(cfg.scan.ports)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -227,29 +326,35 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             except Exception as exc:
                 log.error("[%s] PDF generation failed: %s", scan_id, exc)
 
-        _update(
+        _persist(
             status=ScanStatus.DONE,
             finished_at=datetime.datetime.now().isoformat(),
             duration=duration,
+            hosts_scanned=len(scan_results),
             report_file=report_file,
         )
-        log.info("[%s] Done in %s", scan_id, duration)
+        log.info("[%s] Done in %s — %d host(s) scanned", scan_id, duration, len(scan_results))
 
     except Exception as exc:
         log.exception("[%s] Scan error: %s", scan_id, exc)
-        _update(
+        _persist(
             status=ScanStatus.ERROR,
             finished_at=datetime.datetime.now().isoformat(),
             error=str(exc),
         )
+
+    finally:
+        with _running_lock:
+            _running.pop(scan_id, None)
 
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["system"], summary="Liveness probe — no auth required")
 def health() -> dict:
-    running = sum(1 for s in _scans.values() if s["status"] == ScanStatus.RUNNING)
-    return {"status": "ok", "scans_running": running}
+    with _running_lock:
+        running_count = len(_running)
+    return {"status": "ok", "scans_running": running_count}
 
 
 @app.post(
@@ -267,31 +372,34 @@ def start_scan(
     """
     Enqueue a new scan. Returns immediately with a `scan_id` you can poll at
     `GET /scans/{scan_id}`.
+
+    Only one scan can run at a time (embedded hardware constraint).
     """
-    # Limit to one concurrent scan (embedded hardware constraint)
-    with _scans_lock:
-        running = [s for s in _scans.values() if s["status"] == ScanStatus.RUNNING]
-        if running:
+    with _running_lock:
+        if _running:
+            running_id = next(iter(_running))
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"A scan is already running (id={running[0]['scan_id']}). Wait for it to finish.",
+                detail=f"A scan is already running (id={running_id}). Wait for it to finish.",
             )
 
     scan_id = str(uuid.uuid4())[:8]
+    now = datetime.datetime.now().isoformat()
     entry: dict[str, Any] = {
-        "scan_id":      scan_id,
-        "status":       ScanStatus.PENDING,
-        "profile":      req.profile,
-        "started_at":   datetime.datetime.now().isoformat(),
-        "finished_at":  None,
-        "duration":     None,
-        "hosts_found":  0,
+        "scan_id":       scan_id,
+        "status":        ScanStatus.PENDING,
+        "profile":       req.profile,
+        "started_at":    now,
+        "finished_at":   None,
+        "duration":      None,
+        "hosts_found":   0,
         "hosts_scanned": 0,
-        "report_file":  None,
-        "error":        None,
+        "report_file":   None,
+        "error":         None,
     }
-    with _scans_lock:
-        _scans[scan_id] = entry
+    _db_insert(entry)
+    with _running_lock:
+        _running[scan_id] = dict(entry)
 
     background_tasks.add_task(_run_scan, scan_id, req)
     return ScanSummary(**entry)
@@ -304,8 +412,12 @@ def start_scan(
     response_model=ScanSummary,
 )
 def get_scan(_auth: AuthDep, scan_id: str) -> ScanSummary:
-    with _scans_lock:
-        entry = _scans.get(scan_id)
+    # Prefer live in-memory state for running scans (has up-to-date hosts_scanned)
+    with _running_lock:
+        live = _running.get(scan_id)
+    if live:
+        return ScanSummary(**live)
+    entry = _db_get(scan_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Scan '{scan_id}' not found")
     return ScanSummary(**entry)
@@ -318,10 +430,15 @@ def get_scan(_auth: AuthDep, scan_id: str) -> ScanSummary:
     response_model=list[ScanSummary],
 )
 def list_scans(_auth: AuthDep) -> list[ScanSummary]:
-    with _scans_lock:
-        entries = list(_scans.values())
-    entries.sort(key=lambda e: e["started_at"], reverse=True)
-    return [ScanSummary(**e) for e in entries]
+    entries = _db_list()
+    # Overlay live state for any running scans
+    with _running_lock:
+        live_copy = dict(_running)
+    merged = []
+    for e in entries:
+        sid = e["scan_id"]
+        merged.append(ScanSummary(**(live_copy.get(sid, e))))
+    return merged
 
 
 @app.get(
