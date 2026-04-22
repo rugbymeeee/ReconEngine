@@ -88,6 +88,8 @@ RECOMMENDATIONS = {
 }
 
 
+ACTION_PLAN_MAX_ITEMS = 25
+
 # ── Textes client (non-technique) ─────────────────────────────────────────────
 _PLAIN_INTROS = {
     "CRITIQUE": (
@@ -162,7 +164,7 @@ def _build_action_plan(hosts: list) -> list:
     actions.sort(key=lambda a: (_sev_order[a["severity_class"]], a["ip"], a["port"]))
     for i, a in enumerate(actions, 1):
         a["num"] = i
-    return actions[:25]
+    return actions[:ACTION_PLAN_MAX_ITEMS]
 
 
 # ── Fonctions internes ─────────────────────────────────────────────────────────
@@ -198,11 +200,14 @@ def _format_service(pinfo: dict) -> str:
     return " ".join(filter(None, [product, version])) or name or "inconnu"
 
 
-def _software_query(pinfo: dict) -> str:
+def software_query(pinfo: dict) -> str:
     """Construit la chaîne de recherche exploit la plus précise possible."""
     product = (pinfo.get("product") or "").strip()
     version = (pinfo.get("version") or "").strip()
     return " ".join(filter(None, [product, version])) or (pinfo.get("name") or "")
+
+
+_software_query = software_query
 
 
 def _risk_from_counts(counts: dict) -> tuple[float, str]:

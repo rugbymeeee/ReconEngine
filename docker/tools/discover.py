@@ -8,12 +8,17 @@ Stratégie :
 
 Point d'entrée public : discover(iface, network, timeout) → list[str]
 """
-import fcntl
 import ipaddress
 import logging
 import os
 import socket
 import struct
+
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False  # Windows — _get_netmask() retourne None, fallback /24
 
 from scapy.all import arping, get_if_addr, get_if_list
 
@@ -29,7 +34,9 @@ def _is_root() -> bool:
 
 
 def _get_netmask(ifname: str) -> str | None:
-    """Netmask via ioctl SIOCGIFNETMASK (Linux uniquement)."""
+    """Netmask via ioctl SIOCGIFNETMASK (Linux uniquement). Retourne None sur Windows."""
+    if not _HAS_FCNTL:
+        return None
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         result = fcntl.ioctl(
@@ -124,11 +131,13 @@ def _nmap_ping(network: ipaddress.IPv4Network, timeout: int = 30) -> dict:
 def _discover_network(network: ipaddress.IPv4Network, timeout: int) -> dict:
     """Lance ARP + éventuellement nmap ping sur un réseau. ARP est prioritaire."""
     arp = _arp_scan(network, timeout=timeout)
-    nmap_hosts = (
-        _nmap_ping(network)
-        if network.prefixlen >= _NMAP_MAX_PREFIX
-        else {}
-    )
+
+    small_network = network.prefixlen >= _NMAP_MAX_PREFIX
+    arp_covered = _is_root() and bool(arp)
+    run_nmap = small_network and not arp_covered
+
+    nmap_hosts = _nmap_ping(network, timeout=timeout) if run_nmap else {}
+
     if not arp and not nmap_hosts and not _is_root():
         log.warning(
             "Réseau %s trop grand pour nmap et ARP désactivé (pas root).",

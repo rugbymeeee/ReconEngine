@@ -8,9 +8,10 @@ Pipeline en 4 phases :
   4. Génération du rapport PDF (WeasyPrint)
 
 Usage :
-  python main.py [quick|full] [-t CIDR] [-i IFACE] [-o OUTPUT] [--ports PORTS]
+  python main.py [quick|full] [-t CIDR] [-i IFACE] [-o OUTPUT] [--ports PORTS] [--workers N] [--timeout SEC]
 """
 import argparse
+import datetime
 import logging
 import sys
 import time
@@ -57,9 +58,10 @@ def _port_count(port_spec: str) -> int:
     return total or 1
 
 
-def render_host(console: Console, ip: str, data, cache: dict) -> None:
+def render_host(console: Console, ip: str, data, cache: dict, mac: str = "N/A") -> None:
     """Affiche les résultats d'un hôte dans le terminal."""
-    console.rule(f"[bold cyan]{ip}[/]")
+    mac_str = f"  [dim]MAC :[/] {mac}" if mac and mac != "N/A" else ""
+    console.rule(f"[bold cyan]{ip}[/]{mac_str}")
 
     os_str = scan.get_os(data)
     if os_str:
@@ -96,18 +98,13 @@ def render_host(console: Console, ip: str, data, cache: dict) -> None:
             s = f"{s} ({extra})" if s else extra
         return s or (pinfo.get("name") or "")
 
-    def _query(pinfo: dict) -> str:
-        p = (pinfo.get("product") or "").strip()
-        v = (pinfo.get("version") or "").strip()
-        return " ".join(filter(None, [p, v])) or (pinfo.get("name") or "")
-
     for proto in protocols:
         for port in sorted(data[proto].keys()):
             pinfo = data[proto][port]
             state = pinfo.get("state", "")
             if state not in ("open", "filtered"):
                 continue
-            query = _query(pinfo)
+            query = rapport.software_query(pinfo)
             found = exploits.find(query, cache=cache) if query else []
             exploit_str = " · ".join(e.get("Title", "?") for e in found[:2])
             table.add_row(
@@ -146,6 +143,8 @@ def main() -> None:
     parser.add_argument("-i", "--iface",   metavar="IFACE", help="Interface réseau (ex: eth0)")
     parser.add_argument("-o", "--output",  metavar="PATH",  help="Chemin du rapport PDF de sortie")
     parser.add_argument("--ports",         metavar="PORTS", help="Ports à scanner (ex: 22,80,443 ou 1-1024)")
+    parser.add_argument("--workers",       metavar="N",     type=int, help="Threads parallèles (défaut : 8)")
+    parser.add_argument("--timeout",       metavar="SEC",   type=int, help="Délai découverte ARP en secondes (défaut : 5)")
     args = parser.parse_args()
 
     cfg = cfg_mod.Config.load()
@@ -153,6 +152,10 @@ def main() -> None:
         cfg.scan.profile = args.profile
     if args.ports:
         cfg.scan.ports = args.ports
+    if args.workers:
+        cfg.scan.max_workers = args.workers
+    if args.timeout:
+        cfg.scan.discovery_timeout = args.timeout
 
     console = Console()
     profile_info = cfg_mod.SCAN_PROFILES.get(cfg.scan.profile, cfg_mod.SCAN_PROFILES["full"])
@@ -167,6 +170,7 @@ def main() -> None:
     ))
 
     # ── Phase 1 : Découverte ───────────────────────────────────────────────────
+    start = time.monotonic()
     console.print("\n[bold]Phase 1[/] — Découverte des hôtes")
     discovered_hosts = discover.discover(
         iface=args.iface,
@@ -184,7 +188,6 @@ def main() -> None:
     # ── Phase 2 : Scan parallèle ───────────────────────────────────────────────
     exploit_cache: dict = {}
     scan_results: dict = {}
-    start = time.monotonic()
 
     console.print(
         f"\n[bold]Phase 2[/] — Scan des ports "
@@ -225,8 +228,9 @@ def main() -> None:
 
     # ── Phase 3 : Affichage terminal ───────────────────────────────────────────
     console.print(f"\n[bold]Phase 3[/] — Résultats ({len(scan_results)} hôte(s) avec données)")
+    mac_by_ip = {h["ip"]: h.get("mac", "N/A") for h in discovered_hosts}
     for ip, data in scan_results.items():
-        render_host(console, ip, data, exploit_cache)
+        render_host(console, ip, data, exploit_cache, mac=mac_by_ip.get(ip, "N/A"))
 
     if not scan_results:
         console.print("[yellow]Aucun résultat à reporter.[/]")
@@ -235,9 +239,12 @@ def main() -> None:
     # ── Phase 4 : Rapport PDF ──────────────────────────────────────────────────
     console.print(f"\n[bold]Phase 4[/] — Génération du rapport PDF")
     n_ports = _port_count(cfg.scan.ports)
+    output_path = args.output or (
+        f"{cfg.output_dir}/Rapport_Audit_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
     out = rapport.generate_report(
         scan_results,
-        output_path=args.output,
+        output_path=output_path,
         duration=duration,
         total_ports=n_ports,
         cache=exploit_cache,

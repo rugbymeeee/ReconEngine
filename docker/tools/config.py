@@ -96,4 +96,12 @@ class Config:
         if v := os.environ.get("RECONENGINE_OUTPUT_DIR"):
             cfg.output_dir = v
 
+        if cfg.scan.profile not in SCAN_PROFILES:
+            raise ValueError(
+                f"Profil invalide : '{cfg.scan.profile}'. "
+                f"Profils disponibles : {', '.join(SCAN_PROFILES)}"
+            )
+        if cfg.scan.max_workers < 1:
+            raise ValueError(f"max_workers doit être ≥ 1, reçu : {cfg.scan.max_workers}")
+
         return cfg
