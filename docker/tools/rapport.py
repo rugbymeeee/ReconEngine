@@ -209,9 +209,6 @@ def software_query(pinfo: dict) -> str:
     return " ".join(filter(None, [product, version])) or (pinfo.get("name") or "")
 
 
-_software_query = software_query
-
-
 def _risk_from_counts(counts: dict) -> tuple[float, str]:
     """Score 0-100 et niveau textuel depuis les comptes par sévérité."""
     total = sum(counts.values())
@@ -287,7 +284,7 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
             else:
                 filtered_count += 1
 
-            query = _software_query(pinfo)
+            query = software_query(pinfo)
             found = exploit_mod.find(query, cache=cache)
 
             sev_class, sev_text = _classify(port, pinfo, found)
@@ -309,7 +306,7 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
                 "recommendation": RECOMMENDATIONS[sev_class],
                 "product":        (pinfo.get("product") or "").strip(),
                 "version":        (pinfo.get("version") or "").strip(),
-                "desc":           _format_service(pinfo),
+                "desc":           svc,
             })
 
     # Tri : ports ouverts d'abord, puis sévérité décroissante

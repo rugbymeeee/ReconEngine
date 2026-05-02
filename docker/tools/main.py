@@ -188,7 +188,8 @@ def main() -> None:
     # ── Phase 2 : Scan parallèle ───────────────────────────────────────────────
     exploit_cache: dict = {}
     scan_results: dict = {}
-    twophase = cfg.scan.profile == "full"
+    # two-phase uniquement si full ET aucun port set explicite par l'utilisateur
+    twophase = cfg.scan.profile == "full" and not args.ports
 
     console.print(
         f"\n[bold]Phase 2[/] — Scan des ports "
