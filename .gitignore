@@ -1,0 +1,11 @@
+*/.venv
+*/tools/__pycache__
+.venv
+rapports
+graphify-out
+.claude
+.obsidian
+_ast_deep.py
+_COMMUNITY_Report Generation.md
+.graphify_ast.json
+_COMMUNITY_Port Scanner & Profiles.md
