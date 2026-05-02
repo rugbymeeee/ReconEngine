@@ -65,7 +65,9 @@ def get_os(data) -> str:
         matches = data.get("osmatch") or []
         if matches:
             best = matches[0]
-            return f"{best['name']} ({best['accuracy']}%)"
+            name = best.get("name", "")
+            acc  = best.get("accuracy", "?")
+            return f"{name} ({acc}%)" if name else ""
     except Exception:
         pass
     return ""

@@ -3,8 +3,8 @@ Découverte d'hôtes sur le réseau local.
 
 Stratégie :
   1. ARP broadcast (Scapy) — rapide, fonctionne sur tout type de réseau, nécessite root.
-  2. nmap ping sweep (-sn) — utilisé en complément sur les petits réseaux (≤ /24)
-     ou comme seul moyen si root non disponible.
+  2. nmap ping sweep (-sn) — lancé en parallèle de l'ARP sur les petits réseaux,
+     ou seul si root non disponible.
 
 Point d'entrée public : discover(iface, network, timeout) → list[str]
 """
@@ -13,6 +13,7 @@ import logging
 import os
 import socket
 import struct
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import fcntl
@@ -76,8 +77,13 @@ def _interface_networks() -> tuple[dict, set]:
     return networks, local_ips
 
 
-def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 2) -> dict:
-    """ARP broadcast sur le réseau. Retourne {ip: {"ip": str, "mac": str}}."""
+def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5) -> dict:
+    """
+    ARP broadcast sur le réseau. Retourne {ip: {"ip": str, "mac": str}}.
+
+    Une seule passe avec inter=0 (rafale de paquets) : plus rapide que plusieurs
+    passes séquentielles avec timeout complet chacune.
+    """
     if not _is_root():
         log.warning("[ARP] Ignoré — droits root requis.")
         return {}
@@ -85,30 +91,37 @@ def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 2) 
         timeout = max(timeout, 10)  # plus de temps sur grands réseaux
 
     hosts: dict = {}
-    for attempt in range(retry):
-        try:
-            ans, _ = arping(str(network), timeout=timeout, verbose=False)
-            for _, rcv in ans:
-                ip = rcv.psrc
-                if ip not in hosts:
-                    hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
-        except PermissionError:
-            log.error("[ARP] Permission refusée (nécessite root).")
-            break
-        except Exception as e:
-            log.warning("[ARP] Tentative %d/%d : %s", attempt + 1, retry, e)
+    try:
+        # inter=0 : pas de délai entre les paquets ARP → rafale maximale
+        ans, _ = arping(str(network), timeout=timeout, verbose=False, inter=0)
+        for _, rcv in ans:
+            ip = rcv.psrc
+            if ip not in hosts:
+                hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
+    except PermissionError:
+        log.error("[ARP] Permission refusée (nécessite root).")
+    except Exception as e:
+        log.warning("[ARP] Erreur : %s", e)
     return hosts
 
 
 def _nmap_ping(network: ipaddress.IPv4Network, timeout: int = 30) -> dict:
-    """Ping sweep nmap (-sn). Retourne {ip: {"ip": str, "mac": str}}."""
+    """
+    Ping sweep nmap (-sn). Retourne {ip: {"ip": str, "mac": str}}.
+
+    --max-retries 1   : nmap ne re-sonde qu'une fois (défaut = 2) → 2× plus rapide
+    --min-parallelism : augmente le parallélisme de sondage
+    """
     try:
         nm = scan._get_portscanner()
         nm.scan(
             hosts=str(network),
             # -PE/-PP : sondes ICMP echo + timestamp (plus fiable que ping seul)
             # -PS/-PA : SYN/ACK sur ports communs pour hôtes filtrant l'ICMP
-            arguments=f"-sn -T4 -PE -PP -PS22,80,443,8080 -PA80,443 --host-timeout {timeout}s",
+            arguments=(
+                f"-sn -T4 -PE -PP -PS22,80,443,8080 -PA80,443 "
+                f"--host-timeout {timeout}s --max-retries 1 --min-parallelism 50"
+            ),
         )
         hosts: dict = {}
         for host in nm.all_hosts():
@@ -129,20 +142,36 @@ def _nmap_ping(network: ipaddress.IPv4Network, timeout: int = 30) -> dict:
 
 
 def _discover_network(network: ipaddress.IPv4Network, timeout: int) -> dict:
-    """Lance ARP + éventuellement nmap ping sur un réseau. ARP est prioritaire."""
-    arp = _arp_scan(network, timeout=timeout)
+    """
+    Lance ARP et nmap ping en parallèle sur les petits réseaux.
 
+    Sur les grands réseaux (> /24) : ARP seul (nmap trop lent sans limite d'hôtes).
+    Sans root : nmap ping seul.
+    """
     small_network = network.prefixlen >= _NMAP_MAX_PREFIX
-    arp_covered = _is_root() and bool(arp)
-    run_nmap = small_network and not arp_covered
 
-    nmap_hosts = _nmap_ping(network, timeout=timeout) if run_nmap else {}
+    if _is_root():
+        if small_network:
+            # ARP + nmap ping en parallèle : on prend le meilleur des deux
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                arp_fut  = ex.submit(_arp_scan, network, timeout)
+                nmap_fut = ex.submit(_nmap_ping, network, timeout)
+            arp        = arp_fut.result()
+            nmap_hosts = nmap_fut.result()
+        else:
+            arp        = _arp_scan(network, timeout=timeout)
+            nmap_hosts = {}
+    else:
+        arp = {}
+        if small_network:
+            nmap_hosts = _nmap_ping(network, timeout=timeout)
+        else:
+            log.warning(
+                "Réseau %s trop grand pour nmap et ARP désactivé (pas root).",
+                network,
+            )
+            nmap_hosts = {}
 
-    if not arp and not nmap_hosts and not _is_root():
-        log.warning(
-            "Réseau %s trop grand pour nmap et ARP désactivé (pas root).",
-            network,
-        )
     # ARP écrase nmap si même IP trouvée (MAC plus fiable via ARP)
     return {**nmap_hosts, **arp}
 
@@ -176,14 +205,27 @@ def discover(
         if not networks:
             log.warning("Aucune interface réseau utilisable détectée.")
             return []
-        for net_str, info in networks.items():
-            if iface and info["iface"] != iface:
-                continue
-            net = info["network"]
+
+        # Découverte simultanée sur toutes les interfaces
+        def _scan_iface(net_str: str, info: dict) -> tuple[str, list]:
+            net   = info["network"]
             label = f"{info['iface']} ({net_str})"
             log.info("Découverte sur %s — %d hôtes possibles", label, net.num_addresses)
             merged = _discover_network(net, timeout)
-            results[label] = list(merged.values())
+            return label, list(merged.values())
+
+        filtered = {
+            k: v for k, v in networks.items()
+            if not iface or v["iface"] == iface
+        }
+        with ThreadPoolExecutor(max_workers=min(len(filtered), 4)) as ex:
+            futures = {ex.submit(_scan_iface, k, v): k for k, v in filtered.items()}
+            for fut in as_completed(futures):
+                try:
+                    label, hosts = fut.result()
+                    results[label] = hosts
+                except Exception as e:
+                    log.warning("Découverte échouée : %s", e)
 
     seen: set = set()
     host_list: list[dict] = []

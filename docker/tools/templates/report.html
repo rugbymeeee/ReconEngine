@@ -6,19 +6,27 @@
 <style>
 /* ── Variables ────────────────────────────────────────────────────────────── */
 :root {
-  --brand-900: #0a2540;
+  --brand-900: #050e1a;
+  --brand-800: #0a2540;
   --brand-700: #1a4a7a;
   --brand-500: #2d7dd2;
-  --brand-accent: #00b4d8;
+  --brand-accent: #00c2d4;
+  --brand-accent2: #7c3aed;
   --ink-900: #0f172a;
+  --ink-700: #1e293b;
   --ink-600: #475569;
   --ink-400: #94a3b8;
   --ink-200: #e2e8f0;
+  --ink-100: #f1f5f9;
   --surface:  #f8fafc;
   --c-critical: #dc2626;
+  --c-critical-bg: #fff1f2;
   --c-high:     #ea580c;
+  --c-high-bg:  #fff7ed;
   --c-medium:   #d97706;
+  --c-medium-bg:#fffbeb;
   --c-low:      #059669;
+  --c-low-bg:   #f0fdf4;
   --c-filtered: #6b7280;
   --c-open:     #0ea5e9;
   --c-server:   #6366f1;
@@ -33,7 +41,7 @@
   margin: 1.6cm 2cm 1.8cm;
   @bottom-center {
     content: counter(page) " / " counter(pages);
-    font-size: 8.5pt;
+    font-size: 8pt;
     color: var(--ink-400);
     font-family: "Segoe UI", "Helvetica Neue", sans-serif;
   }
@@ -49,9 +57,10 @@
 
 body {
   font-family: "Segoe UI", "Helvetica Neue", "Calibri", sans-serif;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
   color: var(--ink-900);
   font-size: 9.5pt;
-  line-height: 1.55;
+  line-height: 1.6;
   background: #fff;
 }
 
@@ -66,120 +75,157 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  position: relative;
+  overflow: hidden;
 }
 
-.cv-top { display: flex; justify-content: space-between; align-items: flex-start; }
+/* Accent diagonal en arrière-plan */
+.cover-page::before {
+  content: "";
+  position: absolute;
+  top: -80px; right: -80px;
+  width: 420px; height: 420px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0,194,212,0.12) 0%, transparent 70%);
+  pointer-events: none;
+}
+.cover-page::after {
+  content: "";
+  position: absolute;
+  bottom: 60px; left: -60px;
+  width: 300px; height: 300px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(45,125,210,0.10) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.cv-top { display: flex; justify-content: space-between; align-items: flex-start; position: relative; }
 
 .cv-brand {
-  font-size: 26pt;
+  font-size: 28pt;
   font-weight: 900;
-  letter-spacing: 5px;
+  letter-spacing: 6px;
   text-transform: uppercase;
   color: #fff;
 }
 .cv-brand span { color: var(--brand-accent); }
 .cv-brand-sub {
-  font-size: 9pt;
-  color: rgba(255,255,255,0.55);
-  letter-spacing: 2px;
+  font-size: 8.5pt;
+  color: rgba(255,255,255,0.45);
+  letter-spacing: 3px;
   text-transform: uppercase;
-  margin-top: 4px;
+  margin-top: 5px;
 }
 
 .cv-confidential-top {
-  font-size: 8pt;
-  color: rgba(255,255,255,0.45);
-  border: 1px solid rgba(255,255,255,0.25);
-  padding: 4px 10px;
-  border-radius: 3px;
-  letter-spacing: 1px;
+  font-size: 7.5pt;
+  color: rgba(255,255,255,0.5);
+  border: 1px solid rgba(255,255,255,0.2);
+  padding: 5px 12px;
+  border-radius: 2px;
+  letter-spacing: 2px;
   text-transform: uppercase;
   white-space: nowrap;
 }
 
-.cv-main {
-  text-align: center;
+.cv-main { text-align: center; position: relative; }
+
+/* Trait décoratif au-dessus du titre */
+.cv-divider {
+  width: 60px; height: 3px;
+  background: linear-gradient(90deg, var(--brand-accent), var(--brand-500));
+  margin: 0 auto 20px;
+  border-radius: 2px;
 }
+
 .cv-title {
-  font-size: 28pt;
-  font-weight: 300;
-  line-height: 1.25;
+  font-size: 30pt;
+  font-weight: 200;
+  line-height: 1.2;
   color: #fff;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  letter-spacing: 1px;
 }
-.cv-title strong { font-weight: 800; display: block; }
+.cv-title strong {
+  font-weight: 800;
+  display: block;
+  letter-spacing: 2px;
+}
 .cv-subtitle {
-  font-size: 11pt;
-  color: rgba(255,255,255,0.6);
-  letter-spacing: 1.5px;
+  font-size: 9.5pt;
+  color: rgba(255,255,255,0.5);
+  letter-spacing: 3px;
   text-transform: uppercase;
+  margin-top: 8px;
 }
 
 /* Bannière de risque */
 .cv-risk-banner {
   text-align: center;
-  border-radius: 12px;
-  padding: 16px 30px;
-  margin: 24px auto;
+  border-radius: 8px;
+  padding: 18px 36px;
+  margin: 28px auto 0;
   display: inline-block;
-  min-width: 260px;
+  min-width: 280px;
+  backdrop-filter: blur(4px);
 }
-.cv-risk-banner.risk-critique { background: rgba(220,38,38,0.25); border: 2px solid #dc2626; }
-.cv-risk-banner.risk-eleve    { background: rgba(234,88,12,0.25);  border: 2px solid #ea580c; }
-.cv-risk-banner.risk-modere   { background: rgba(217,119,6,0.25);  border: 2px solid #d97706; }
-.cv-risk-banner.risk-faible   { background: rgba(5,150,105,0.25);  border: 2px solid #059669; }
+.cv-risk-banner.risk-critique { background: rgba(220,38,38,0.18); border: 1.5px solid rgba(220,38,38,0.7); }
+.cv-risk-banner.risk-eleve    { background: rgba(234,88,12,0.18);  border: 1.5px solid rgba(234,88,12,0.7); }
+.cv-risk-banner.risk-modere   { background: rgba(217,119,6,0.18);  border: 1.5px solid rgba(217,119,6,0.7); }
+.cv-risk-banner.risk-faible   { background: rgba(5,150,105,0.18);  border: 1.5px solid rgba(5,150,105,0.7); }
 
 .cv-risk-label {
-  font-size: 9pt;
-  color: rgba(255,255,255,0.7);
+  font-size: 7.5pt;
+  color: rgba(255,255,255,0.6);
   text-transform: uppercase;
-  letter-spacing: 2px;
-  margin-bottom: 4px;
+  letter-spacing: 3px;
+  margin-bottom: 6px;
 }
 .cv-risk-value {
-  font-size: 30pt;
+  font-size: 34pt;
   font-weight: 900;
   line-height: 1;
-  letter-spacing: 3px;
+  letter-spacing: 4px;
 }
-.cv-risk-banner.risk-critique .cv-risk-value { color: #f87171; }
-.cv-risk-banner.risk-eleve    .cv-risk-value { color: #fb923c; }
-.cv-risk-banner.risk-modere   .cv-risk-value { color: #fbbf24; }
-.cv-risk-banner.risk-faible   .cv-risk-value { color: #34d399; }
+.cv-risk-banner.risk-critique .cv-risk-value { color: #fca5a5; }
+.cv-risk-banner.risk-eleve    .cv-risk-value { color: #fdba74; }
+.cv-risk-banner.risk-modere   .cv-risk-value { color: #fde68a; }
+.cv-risk-banner.risk-faible   .cv-risk-value { color: #6ee7b7; }
 .cv-risk-score {
-  font-size: 10pt;
-  color: rgba(255,255,255,0.55);
-  margin-top: 4px;
+  font-size: 9pt;
+  color: rgba(255,255,255,0.4);
+  margin-top: 6px;
+  letter-spacing: 1px;
 }
 
 /* KPIs couverture */
 .cv-kpis {
   display: flex;
   justify-content: center;
-  gap: 20px;
-  margin-top: 12px;
+  gap: 12px;
+  margin-top: 28px;
 }
 .cv-kpi {
   text-align: center;
-  background: rgba(255,255,255,0.07);
-  border: 1px solid rgba(255,255,255,0.15);
-  border-radius: 8px;
-  padding: 14px 20px;
-  min-width: 90px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px;
+  padding: 16px 22px;
+  min-width: 95px;
 }
 .cv-kpi-n {
-  font-size: 22pt;
+  font-size: 24pt;
   font-weight: 900;
   line-height: 1;
   color: #fff;
 }
-.cv-kpi-n.red { color: #f87171; }
+.cv-kpi-n.red { color: #fca5a5; }
 .cv-kpi-l {
-  font-size: 7.5pt;
-  color: rgba(255,255,255,0.5);
+  font-size: 7pt;
+  color: rgba(255,255,255,0.4);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-top: 4px;
+  letter-spacing: 1px;
+  margin-top: 5px;
 }
 
 /* Méta couverture */
@@ -187,16 +233,18 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: flex-end;
-  border-top: 1px solid rgba(255,255,255,0.15);
-  padding-top: 16px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  padding-top: 18px;
+  position: relative;
 }
-.cv-meta-block { font-size: 8.5pt; color: rgba(255,255,255,0.55); line-height: 1.8; }
-.cv-meta-block strong { color: rgba(255,255,255,0.85); }
+.cv-meta-block { font-size: 8.5pt; color: rgba(255,255,255,0.45); line-height: 2; }
+.cv-meta-block strong { color: rgba(255,255,255,0.8); font-weight: 600; }
 .cv-confidential-bottom {
-  font-size: 8pt;
-  color: rgba(255,255,255,0.35);
+  font-size: 7.5pt;
+  color: rgba(255,255,255,0.25);
   text-align: right;
-  line-height: 1.6;
+  line-height: 1.7;
+  letter-spacing: 0.5px;
 }
 
 /* ── En-tête document (pages 2+) ──────────────────────────────────────────── */
@@ -240,12 +288,13 @@ h1 {
   margin: 0 0 16px;
 }
 h2 {
-  font-size: 12pt;
+  font-size: 11.5pt;
   font-weight: 700;
-  color: var(--brand-700);
-  border-left: 4px solid var(--brand-500);
+  color: var(--brand-800);
+  border-left: 4px solid var(--brand-accent);
   padding-left: 10px;
-  margin: 24px 0 10px;
+  margin: 26px 0 12px;
+  letter-spacing: 0.3px;
 }
 h3 {
   font-size: 10pt;
@@ -309,26 +358,27 @@ h3 {
 .kpi-table tr td:last-child  { font-weight: 700; text-align: right; }
 
 /* Graphique de répartition */
-.chart-wrap { min-width: 170px; }
+.chart-wrap { min-width: 185px; }
 .chart-title {
-  font-size: 8pt;
-  font-weight: 600;
+  font-size: 7.5pt;
+  font-weight: 700;
   color: var(--ink-600);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 8px;
+  letter-spacing: 1.2px;
+  margin-bottom: 10px;
 }
 .sev-row {
   display: flex;
   align-items: center;
   gap: 7px;
-  margin-bottom: 6px;
-  font-size: 8.5pt;
+  margin-bottom: 7px;
+  font-size: 8pt;
 }
-.sev-lbl  { width: 60px; text-align: right; font-weight: 700; font-size: 7.5pt; }
-.sev-bg   { flex: 1; background: #e2e8f0; border-radius: 3px; height: 12px; overflow: hidden; }
-.sev-fill { height: 100%; border-radius: 3px; min-width: 3px; }
-.sev-n    { width: 28px; text-align: right; font-weight: 600; color: var(--ink-600); }
+.sev-lbl  { width: 62px; text-align: right; font-weight: 700; font-size: 7pt; letter-spacing: 0.3px; }
+.sev-bg   { flex: 1; background: var(--ink-200); border-radius: 4px; height: 13px; overflow: hidden; position: relative; }
+.sev-fill { height: 100%; border-radius: 4px; min-width: 4px; }
+.sev-pct  { position: absolute; right: 4px; top: 0; bottom: 0; display: flex; align-items: center; font-size: 6.5pt; font-weight: 700; color: rgba(0,0,0,0.4); }
+.sev-n    { width: 24px; text-align: right; font-weight: 700; color: var(--ink-700); font-size: 8.5pt; }
 
 .summary-text {
   font-size: 9pt;
@@ -418,19 +468,30 @@ table {
   font-size: 9pt;
 }
 th {
-  background: var(--brand-900);
+  background: var(--brand-800);
   color: #fff;
-  padding: 7px 10px;
+  padding: 8px 10px;
   text-align: left;
   font-weight: 600;
-  font-size: 8.5pt;
+  font-size: 8pt;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
 }
+th:first-child { border-radius: 4px 0 0 0; }
+th:last-child  { border-radius: 0 4px 0 0; }
 td {
-  padding: 6px 10px;
-  border-bottom: 1px solid #edf0f3;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--ink-100);
   vertical-align: top;
 }
 tr:nth-child(even) td { background: var(--surface); }
+tr:hover td { background: #f0f7ff; }
+
+/* Lignes teintées par sévérité dans le tableau de vulnérabilités */
+tr.row-critical td { border-left: 3px solid var(--c-critical); }
+tr.row-high     td { border-left: 3px solid var(--c-high); }
+tr.row-medium   td { border-left: 3px solid var(--c-medium); }
+tr.row-low      td { border-left: 3px solid var(--c-low); }
 
 /* ── Badges ───────────────────────────────────────────────────────────────── */
 .badge {
@@ -557,19 +618,19 @@ tr:nth-child(even) td { background: var(--surface); }
   align-items: center;
   margin-bottom: 12px;
 }
-.host-header.type-server      { background: linear-gradient(135deg, var(--brand-900) 0%, #312e81 100%); }
-.host-header.type-workstation { background: linear-gradient(135deg, var(--brand-900) 0%, #0e4f6e 100%); }
-.host-header.type-unknown     { background: var(--brand-900); }
-.host-header.type-unreachable { background: #374151; }
+.host-header.type-server      { background: linear-gradient(135deg, #0d1f3c 0%, #1e1b4b 100%); border-left: 4px solid #818cf8; }
+.host-header.type-workstation { background: linear-gradient(135deg, #0d1f3c 0%, #0c3a52 100%); border-left: 4px solid var(--brand-accent); }
+.host-header.type-unknown     { background: var(--brand-800); border-left: 4px solid var(--ink-400); }
+.host-header.type-unreachable { background: #1f2937; border-left: 4px solid #4b5563; }
 
-.host-ip  { font-size: 13pt; font-weight: 800; letter-spacing: 1px; }
-.host-os  { font-size: 8pt; opacity: 0.7; margin-top: 2px; }
+.host-ip  { font-size: 14pt; font-weight: 800; letter-spacing: 1.5px; font-variant-numeric: tabular-nums; }
+.host-os  { font-size: 7.5pt; opacity: 0.6; margin-top: 3px; letter-spacing: 0.3px; }
 .host-type-label {
-  font-size: 7.5pt;
-  opacity: 0.85;
-  margin-top: 3px;
+  font-size: 7pt;
+  opacity: 0.7;
+  margin-top: 4px;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 1.5px;
 }
 .host-right { text-align: right; }
 
@@ -582,8 +643,8 @@ tr:nth-child(even) td { background: var(--surface); }
   padding: 7px 8px;
   text-align: center;
 }
-.stat-val   { font-size: 14pt; font-weight: 900; color: var(--brand-700); line-height: 1; }
-.stat-label { font-size: 7pt; color: var(--ink-600); margin-top: 2px; }
+.stat-val   { font-size: 15pt; font-weight: 900; color: var(--brand-700); line-height: 1; font-variant-numeric: tabular-nums; }
+.stat-label { font-size: 6.5pt; color: var(--ink-400); margin-top: 3px; text-transform: uppercase; letter-spacing: 0.6px; }
 
 /* Pills services */
 .pills { margin: 4px 0 12px; }
@@ -660,6 +721,7 @@ tr:nth-child(even) td { background: var(--surface); }
   </div>
 
   <div class="cv-main">
+    <div class="cv-divider"></div>
     <div class="cv-title">
       Rapport d'Audit
       <strong>de Sécurité Réseau</strong>
@@ -755,6 +817,8 @@ tr:nth-child(even) td { background: var(--surface); }
       <tr><td>Serveurs détectés</td>           <td>{{ server_count }}</td></tr>
       <tr><td>Postes de travail</td>           <td>{{ workstation_count }}</td></tr>
       {% if unreachable_count %}<tr><td>Hôtes hors ligne</td><td>{{ unreachable_count }}</td></tr>{% endif %}
+      <tr><td>Taux d'exposition global</td>    <td>{{ exposure_rate }}%</td></tr>
+      <tr><td>Score de discrétion réseau</td>  <td>{{ stealth_score }}%</td></tr>
       <tr><td>Durée du scan</td>              <td>{{ duration if duration else '—' }}</td></tr>
     </table>
 
@@ -763,22 +827,22 @@ tr:nth-child(even) td { background: var(--surface); }
       <div class="chart-title">Répartition des risques</div>
       <div class="sev-row">
         <span class="sev-lbl" style="color:var(--c-critical)">CRITIQUE</span>
-        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.critical }}%;background:var(--c-critical)"></div></div>
+        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.critical }}%;background:var(--c-critical)"></div>{% if severity_pct.critical > 8 %}<span class="sev-pct">{{ severity_pct.critical }}%</span>{% endif %}</div>
         <span class="sev-n">{{ severity_totals.critical }}</span>
       </div>
       <div class="sev-row">
         <span class="sev-lbl" style="color:var(--c-high)">ÉLEVÉ</span>
-        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.high }}%;background:var(--c-high)"></div></div>
+        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.high }}%;background:var(--c-high)"></div>{% if severity_pct.high > 8 %}<span class="sev-pct">{{ severity_pct.high }}%</span>{% endif %}</div>
         <span class="sev-n">{{ severity_totals.high }}</span>
       </div>
       <div class="sev-row">
         <span class="sev-lbl" style="color:var(--c-medium)">MODÉRÉ</span>
-        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.medium }}%;background:var(--c-medium)"></div></div>
+        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.medium }}%;background:var(--c-medium)"></div>{% if severity_pct.medium > 8 %}<span class="sev-pct">{{ severity_pct.medium }}%</span>{% endif %}</div>
         <span class="sev-n">{{ severity_totals.medium }}</span>
       </div>
       <div class="sev-row">
         <span class="sev-lbl" style="color:var(--c-low)">FAIBLE</span>
-        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.low }}%;background:var(--c-low)"></div></div>
+        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.low }}%;background:var(--c-low)"></div>{% if severity_pct.low > 8 %}<span class="sev-pct">{{ severity_pct.low }}%</span>{% endif %}</div>
         <span class="sev-n">{{ severity_totals.low }}</span>
       </div>
     </div>
@@ -988,7 +1052,7 @@ tr:nth-child(even) td { background: var(--surface); }
   {% set type_cls = 'type-server' if host.host_type == 'server' else ('type-workstation' if host.host_type == 'workstation' else ('type-unreachable' if host.unreachable else 'type-unknown')) %}
   <div class="host-header {{ type_cls }}">
     <div>
-      <div class="host-ip">{{ host.ip }}</div>
+      <div class="host-ip">{{ host.ip }}{% if host.mac and host.mac != 'N/A' %} <span style="font-size:8pt;font-weight:400;opacity:0.6;font-family:monospace;letter-spacing:0.5px">{{ host.mac }}</span>{% endif %}</div>
       {% if host.os %}<div class="host-os">{{ host.os }}</div>{% endif %}
       <div class="host-type-label">
         {% if host.host_type == 'server' %}Serveur{% elif host.host_type == 'workstation' %}Poste de travail{% elif host.unreachable %}Machine hors ligne{% else %}Type inconnu{% endif %}
@@ -1065,7 +1129,7 @@ tr:nth-child(even) td { background: var(--surface); }
     </thead>
     <tbody>
       {% for v in host.vulnerabilities %}
-      <tr>
+      <tr class="row-{{ v.severity_class }}">
         <td><strong>{{ v.port }}</strong></td>
         <td>{{ v.protocol }}</td>
         <td>
@@ -1091,7 +1155,11 @@ tr:nth-child(even) td { background: var(--surface); }
         </td>
         <td>
           {% if v.exploits %}
-          <div class="exploit-list">Exploit(s) public(s) disponible(s) pour ce service</div>
+          <div class="exploit-list">
+            {% for e in v.exploits %}
+            <div>· {{ e[:65] }}{% if e|length > 65 %}…{% endif %}</div>
+            {% endfor %}
+          </div>
           {% else %}
           <div class="no-exploit">Aucun exploit répertorié</div>
           {% endif %}

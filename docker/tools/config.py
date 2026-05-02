@@ -43,14 +43,18 @@ DEFAULT_PORTS = ",".join(map(str, sorted([
 SCAN_PROFILES: dict[str, dict] = {
     "quick": {
         "description": "Scan rapide — détection des ports ouverts, sans scripts",
-        # -Pn : hôtes déjà confirmés actifs (discover.py), évite la re-découverte nmap
-        "arguments": "-sS -T4 --min-rate 2000 -n --open -Pn",
+        # -Pn              : hôtes déjà confirmés actifs (discover.py)
+        # --max-retries 1  : nmap défaut = 2 re-sondes ; 1 suffit sur LAN fiable
+        # --host-timeout   : libère le thread si un hôte ne répond plus
+        # --min-parallelism: force le parallélisme de sondage nmap
+        "arguments": "-sS -T4 --min-rate 2000 -n --open -Pn --max-retries 1 --host-timeout 60s --min-parallelism 20",
     },
     "full": {
         "description": "Scan complet — services, OS et scripts de vulnérabilité (CVSSv2 ≥ 5.0)",
-        # -Pn       : hôtes pré-confirmés, pas besoin de re-ping
-        # --host-timeout 300s : évite qu'un hôte bloque un thread indéfiniment
-        "arguments": "-sS -sV -O --script vuln,default --script-args mincvss=5.0 -T4 -Pn --host-timeout 300s",
+        # -Pn              : hôtes pré-confirmés
+        # --max-retries 1  : réduit le temps sur ports filtrés/closed
+        # --host-timeout   : évite qu'un hôte bloque un thread indéfiniment
+        "arguments": "-sS -sV -O --script vuln,default --script-args mincvss=5.0 -T4 -Pn --host-timeout 300s --max-retries 1",
     },
 }
 

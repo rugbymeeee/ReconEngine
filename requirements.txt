@@ -20,7 +20,7 @@ brotli==1.2.0
 zopfli==0.4.0
 
 # Interface terminal
-rich>=13.7.0
+rich~=13.7
 
 # Cartographie réseau
-matplotlib>=3.8.0
+matplotlib~=3.8

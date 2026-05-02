@@ -10,7 +10,9 @@ pour éviter tout appel searchsploit dupliqué.
 """
 import datetime
 import logging
+import os
 import pathlib
+from concurrent.futures import ThreadPoolExecutor
 from ipaddress import AddressValueError, ip_address
 
 from jinja2 import Environment, FileSystemLoader
@@ -215,8 +217,9 @@ def _risk_from_counts(counts: dict) -> tuple[float, str]:
     total = sum(counts.values())
     if not total:
         return 0.0, "FAIBLE"
-    weighted = sum(SEVERITY_WEIGHTS.get(sev, 0) * n for sev, n in counts.items())
-    score = min(round(weighted / (total * SEVERITY_WEIGHTS["critical"]) * 100, 1), 100.0)
+    _weights = SEVERITY_WEIGHTS  # local ref — évite lookup global répété
+    weighted = sum(_weights.get(sev, 0) * n for sev, n in counts.items())
+    score = min(round(weighted / (total * _weights["critical"]) * 100, 1), 100.0)
     for threshold, label in LEVEL_THRESHOLDS:
         if score >= threshold:
             return score, label
@@ -226,16 +229,12 @@ def _risk_from_counts(counts: dict) -> tuple[float, str]:
 def _classify_host_type(os_str: str, open_ports: set) -> str:
     """Classifie l'hôte : 'server' | 'workstation' | 'unknown'."""
     os_lower = os_str.lower()
-    for kw in _SERVER_OS_KW:
-        if kw in os_lower:
-            return "server"
-    for kw in _WORKSTATION_OS_KW:
-        if kw in os_lower:
-            return "workstation"
-    # Heuristique : 2+ ports serveur ouverts → probablement un serveur
+    if any(kw in os_lower for kw in _SERVER_OS_KW):
+        return "server"
+    if any(kw in os_lower for kw in _WORKSTATION_OS_KW):
+        return "workstation"
     if len(open_ports & _SERVER_INDICATOR_PORTS) >= 2:
         return "server"
-    # SSH seul sans autre indicateur → inconnu
     return "unknown"
 
 
@@ -592,11 +591,20 @@ def _generate_network_map_image(topology: list) -> str:
     plt.tight_layout(pad=0.4)
 
     buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
-                facecolor="#f8fafc", edgecolor="none")
+    try:
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                    facecolor="#f8fafc", edgecolor="none")
+    except Exception:
+        log.warning("Erreur lors du rendu matplotlib.", exc_info=True)
+        plt.close(fig)
+        return ""
     plt.close(fig)
     buf.seek(0)
-    return "data:image/png;base64," + base64.b64encode(buf.read()).decode()
+    img_data = buf.read()
+    if not img_data:
+        log.warning("Image matplotlib vide générée.")
+        return ""
+    return "data:image/png;base64," + base64.b64encode(img_data).decode()
 
 
 # ── API publique ───────────────────────────────────────────────────────────────
@@ -688,14 +696,32 @@ def build_report_data(
     top_services = sorted(services_global.items(), key=lambda x: x[1], reverse=True)[:6]
     topology = _build_topology(all_hosts, hosts)
 
-    # Compteurs par type
-    server_count = sum(1 for h in hosts if h.get("host_type") == "server")
-    workstation_count = sum(1 for h in hosts if h.get("host_type") == "workstation")
-    unreachable_count = sum(1 for h in hosts if h.get("unreachable"))
+    # Lance matplotlib en arrière-plan pendant que le reste du contexte est calculé
+    _map_executor = ThreadPoolExecutor(max_workers=1)
+    _map_future = _map_executor.submit(_generate_network_map_image, topology)
+
+    # Compteurs par type — un seul passage sur hosts
+    server_count = workstation_count = unreachable_count = 0
+    for _h in hosts:
+        _ht = _h.get("host_type")
+        if _ht == "server":
+            server_count += 1
+        elif _ht == "workstation":
+            workstation_count += 1
+        if _h.get("unreachable"):
+            unreachable_count += 1
 
     action_plan = _build_action_plan(hosts)
     summary_text = _plain_summary(global_risk, n_hosts, n_critical, n_vulns, risk_dist)
-    network_map_img = _generate_network_map_image(topology)
+
+    # Collecte le résultat matplotlib (prêt ou presque prêt à ce stade)
+    try:
+        network_map_img = _map_future.result(timeout=30)
+    except Exception:
+        log.warning("Génération de la carte réseau expirée ou échouée.", exc_info=True)
+        network_map_img = ""
+    finally:
+        _map_executor.shutdown(wait=False)
 
     target_ips = [h["ip"] for h in all_hosts]
 
@@ -757,7 +783,14 @@ def generate_report(
     if output_path is None:
         output_path = f"rapports/Rapport_Audit_{ts}.pdf"
 
-    out = pathlib.Path(output_path)
+    out = pathlib.Path(output_path).resolve()
+    # Bloquer les path traversal : le PDF doit rester dans le répertoire de travail courant
+    try:
+        out.relative_to(pathlib.Path.cwd())
+    except ValueError:
+        raise ValueError(
+            f"Chemin de sortie non autorisé (hors du répertoire courant) : {out}"
+        )
     out.parent.mkdir(parents=True, exist_ok=True)
 
     data = build_report_data(
@@ -775,6 +808,7 @@ def generate_report(
 
     log.info("Rendu PDF en cours...")
     HTML(string=html_content, base_url=str(TEMPLATES_DIR)).write_pdf(str(out))
+    os.chmod(out, 0o600)
     log.info("Rapport généré : %s", out)
     return str(out)
 
