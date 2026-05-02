@@ -188,10 +188,12 @@ def main() -> None:
     # ── Phase 2 : Scan parallèle ───────────────────────────────────────────────
     exploit_cache: dict = {}
     scan_results: dict = {}
+    twophase = cfg.scan.profile == "full"
 
     console.print(
         f"\n[bold]Phase 2[/] — Scan des ports "
         f"([cyan]{cfg.scan.max_workers}[/] thread(s) parallèle(s))"
+        + (" · [dim]mode deux phases (TCP complet → services)[/]" if twophase else "")
     )
 
     with Progress(
@@ -205,10 +207,16 @@ def main() -> None:
         task_id = progress.add_task("Scan en cours…", total=len(ips))
 
         with ThreadPoolExecutor(max_workers=cfg.scan.max_workers) as executor:
-            futures = {
-                executor.submit(scan.scan_host, ip, cfg.scan.ports, cfg.scan.profile): ip
-                for ip in ips
-            }
+            if twophase:
+                futures = {
+                    executor.submit(scan.scan_host_twophase, ip, cfg.scan.profile): ip
+                    for ip in ips
+                }
+            else:
+                futures = {
+                    executor.submit(scan.scan_host, ip, cfg.scan.ports, cfg.scan.profile): ip
+                    for ip in ips
+                }
             for future in as_completed(futures):
                 ip = futures[future]
                 progress.advance(task_id)
@@ -238,7 +246,7 @@ def main() -> None:
 
     # ── Phase 4 : Rapport PDF ──────────────────────────────────────────────────
     console.print(f"\n[bold]Phase 4[/] — Génération du rapport PDF")
-    n_ports = _port_count(cfg.scan.ports)
+    n_ports = 65535 if twophase else _port_count(cfg.scan.ports)
     output_path = args.output or (
         f"{cfg.output_dir}/Rapport_Audit_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     )

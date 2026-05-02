@@ -38,6 +38,14 @@ DEFAULT_PORTS = ",".join(map(str, sorted([
     # Services divers à risque
     4444, 4848, 5000, 5601, 7001, 7002, 8009, 8161,
     9000, 9001, 9042, 9092, 15672, 16379, 28017,
+    # IoT / protocoles industriels
+    502,   # Modbus TCP (automates industriels)
+    554,   # RTSP (caméras IP, streaming)
+    1883,  # MQTT (IoT, souvent sans auth)
+    1900,  # UPnP SSDP (discovery, exposition involontaire)
+    3702,  # WS-Discovery (imprimantes, caméras)
+    5672,  # AMQP (RabbitMQ)
+    8883,  # MQTT over TLS
 ])))
 
 SCAN_PROFILES: dict[str, dict] = {
