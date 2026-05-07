@@ -31,6 +31,10 @@ def _get_portscanner() -> nmap.PortScanner:
     return nmap.PortScanner(nmap_search_path=_NMAP_PATH)
 
 
+def _scan_args(profile: str, arguments: str | None) -> str:
+    return arguments or SCAN_PROFILES.get(profile, SCAN_PROFILES["full"])["arguments"]
+
+
 def scan_host(
     ip: str,
     ports: str,
@@ -47,13 +51,14 @@ def scan_host(
         arguments: Arguments nmap personnalisés (remplace le profil si fourni).
     """
     nm = _get_portscanner()
-    args = arguments or SCAN_PROFILES.get(profile, SCAN_PROFILES["full"])["arguments"]
+    args = _scan_args(profile, arguments)
     try:
         nm.scan(ip, ports, arguments=args)
     except Exception as e:
         log.error("Scan échoué pour %s : %s", ip, e)
         return None
-    return nm[ip] if ip in nm.all_hosts() else None
+    hosts = nm.all_hosts()
+    return nm[ip] if ip in hosts else None
 
 
 def get_os(data) -> str:

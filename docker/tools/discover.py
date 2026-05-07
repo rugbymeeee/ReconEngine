@@ -39,12 +39,11 @@ def _get_netmask(ifname: str) -> str | None:
     if not _HAS_FCNTL:
         return None
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        result = fcntl.ioctl(
-            s.fileno(), 0x891B,
-            struct.pack("256s", ifname.encode()[:15]),
-        )
-        s.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            result = fcntl.ioctl(
+                s.fileno(), 0x891B,
+                struct.pack("256s", ifname.encode()[:15]),
+            )
         return socket.inet_ntoa(result[20:24])
     except Exception:
         return None
@@ -62,8 +61,9 @@ def _interface_networks() -> tuple[dict, set]:
                 continue
             local_ips.add(ip)
             netmask = _get_netmask(iface)
+            mask = netmask if (netmask and netmask != "0.0.0.0") else "24"
             net = ipaddress.ip_network(
-                f"{ip}/{netmask}" if (netmask and netmask != "0.0.0.0") else f"{ip}/24",
+                f"{ip}/{mask}",
                 strict=False,
             )
             if net.prefixlen < 8:  # ignore les réseaux absurdement larges

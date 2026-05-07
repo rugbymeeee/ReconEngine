@@ -35,6 +35,21 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+STATE_DISPLAY = {
+    "open": "[green]ouvert[/]",
+    "filtered": "[yellow]filtré[/]",
+}
+
+
+def _service_str(pinfo: dict) -> str:
+    p = (pinfo.get("product") or "").strip()
+    v = (pinfo.get("version") or "").strip()
+    extra = (pinfo.get("extrainfo") or "").strip()
+    s = " ".join(filter(None, [p, v]))
+    if extra and extra not in s:
+        s = f"{s} ({extra})" if s else extra
+    return s or (pinfo.get("name") or "")
+
 
 def _port_count(port_spec: str) -> int:
     """Compte le nombre de ports dans une expression nmap (ex: '22,80,1-1024')."""
@@ -83,20 +98,6 @@ def render_host(console: Console, ip: str, data, cache: dict, mac: str = "N/A") 
     table.add_column("Service",                      width=16)
     table.add_column("Produit / Version", style="dim")
     table.add_column("Exploits connus",  style="red", width=38)
-
-    STATE_DISPLAY = {
-        "open":     "[green]ouvert[/]",
-        "filtered": "[yellow]filtré[/]",
-    }
-
-    def _service_str(pinfo: dict) -> str:
-        p = (pinfo.get("product") or "").strip()
-        v = (pinfo.get("version") or "").strip()
-        extra = (pinfo.get("extrainfo") or "").strip()
-        s = " ".join(filter(None, [p, v]))
-        if extra and extra not in s:
-            s = f"{s} ({extra})" if s else extra
-        return s or (pinfo.get("name") or "")
 
     for proto in protocols:
         for port in sorted(data[proto].keys()):

@@ -309,7 +309,7 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
                 "recommendation": RECOMMENDATIONS[sev_class],
                 "product":        (pinfo.get("product") or "").strip(),
                 "version":        (pinfo.get("version") or "").strip(),
-                "desc":           _format_service(pinfo),
+                "desc":           svc,
             })
 
     # Tri : ports ouverts d'abord, puis sévérité décroissante
