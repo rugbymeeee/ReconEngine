@@ -27,9 +27,8 @@ def discover_remote_networks(gateway_ip):
 
 def _get_netmask(ifname):
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        result = fcntl.ioctl(s.fileno(), 0x891B, struct.pack('256s', ifname.encode('utf-8')[:15]))
-        s.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            result = fcntl.ioctl(s.fileno(), 0x891B, struct.pack('256s', ifname.encode('utf-8')[:15]))
         return socket.inet_ntoa(result[20:24])
     except Exception:
         return None
