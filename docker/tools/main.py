@@ -9,17 +9,17 @@ from rich.console import Console
 from rich.table import Table
 
 
+def _safe_call(func, default):
+    try:
+        return func()
+    except Exception:
+        return default
+
+
 def render_scan_result(console: Console, ip: str, data):
     console.rule(f"Scan results for {ip}")
-    try:
-        state = data.state()
-    except Exception:
-        state = "unknown"
-
-    try:
-        protocols = data.all_protocols()
-    except Exception:
-        protocols = []
+    state = _safe_call(data.state, "unknown")
+    protocols = _safe_call(data.all_protocols, [])
 
     if not protocols:
         console.print("No open ports or protocols detected.")
