@@ -45,7 +45,8 @@ def _get_interface_networks():
 
             local_ips.add(ip)
             netmask = _get_netmask(iface)
-            net = ipaddress.ip_network(f"{ip}/{netmask if netmask and netmask != '0.0.0.0' else '24'}", strict=False)
+            mask = netmask if netmask and netmask != "0.0.0.0" else "24"
+            net = ipaddress.ip_network(f"{ip}/{mask}", strict=False)
 
             # ! à changer !
             if net.prefixlen < 8:
