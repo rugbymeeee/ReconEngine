@@ -34,12 +34,8 @@ def scan_host(ip, ports="1-3389", arguments="-Pn -sV -T4 --min-rate 1000"):
     return nm[ip] if ip in nm.all_hosts() else None
 
 def scan_network(network, ports="1-3389", arguments="-Pn -sV -T4 --min-rate 1000"):
-    nm = _get_portscanner()
-    nm.scan(hosts=network, ports=ports, arguments=arguments)
-    results = {}
-    for host in nm.all_hosts():
-        results[host] = nm[host]
-    return results
+    nm = _run_scan(hosts=network, ports=ports, arguments=arguments)
+    return {host: nm[host] for host in nm.all_hosts()}
 
 def save_scan_results(scan_data, output_file):
     with open(output_file, 'w') as f:
