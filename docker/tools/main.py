@@ -63,11 +63,7 @@ def render_scan_result(console: Console, ip: str, data):
             # Build a concise software query for searchsploit: prefer product+version, fallback to name
             software_query = "".join(filter(None, [pinfo.get("product") or "", " ", pinfo.get("version") or ""]))
             software_query = software_query.strip() or name
-            exploits = []
-            try:
-                exploits = scan.find_exploits(software_query)
-            except Exception:
-                exploits = []
+            exploits = _safe_call(lambda: scan.find_exploits(software_query), [])
 
             if exploits:
                 exploit_summary = "| ".join(e.get("Title", "?") for e in exploits[:2])
