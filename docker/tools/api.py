@@ -21,6 +21,7 @@ Run:
 """
 import contextlib
 import datetime
+import hmac
 import logging
 import os
 import pathlib
@@ -32,9 +33,9 @@ import uuid
 from enum import StrEnum
 from typing import Annotated, Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ── Path setup (tools/ may not be on sys.path when invoked as api.py) ─────────
 _THIS_DIR = pathlib.Path(__file__).parent.resolve()
@@ -46,11 +47,7 @@ import discover  # noqa: E402
 import rapport  # noqa: E402
 import scan  # noqa: E402
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
-)
+cfg_mod.setup_logging()
 log = logging.getLogger(__name__)
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
@@ -61,9 +58,35 @@ if _API_KEY == "changeme":
         "Set a strong key before exposing this API on a public interface."
     )
 
+# Brute-force protection : compteur d'échecs par IP sur une fenêtre glissante.
+_auth_failures: dict[str, list[float]] = {}
+_auth_lock = threading.Lock()
+_MAX_AUTH_FAILURES = 10   # tentatives autorisées par fenêtre
+_AUTH_WINDOW = 60.0       # fenêtre en secondes
 
-def _require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
-    if x_api_key != _API_KEY:
+
+def _require_api_key(
+    request: Request,
+    x_api_key: Annotated[str | None, Header()] = None,
+) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+
+    with _auth_lock:
+        # Nettoyer les entrées expirées + vérifier le rate limit
+        recent = [t for t in _auth_failures.get(client_ip, []) if now - t < _AUTH_WINDOW]
+        _auth_failures[client_ip] = recent
+        if len(recent) >= _MAX_AUTH_FAILURES:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed authentication attempts. Try again later.",
+            )
+
+    # Comparaison en temps constant pour prévenir les timing attacks
+    key_provided = x_api_key or ""
+    if not hmac.compare_digest(key_provided, _API_KEY):
+        with _auth_lock:
+            _auth_failures.setdefault(client_ip, []).append(now)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
 
@@ -191,8 +214,11 @@ _running_lock = threading.Lock()
 class ScanRequest(BaseModel):
     profile: str = Field(
         default="full",
-        pattern="^(quick|full)$",
-        description="Scan profile: 'quick' (ports only) or 'full' (services + OS + CVE scripts)",
+        description=(
+            "Scan profile. Available: "
+            + ", ".join(f"'{k}'" for k in cfg_mod.SCAN_PROFILES)
+            + ". See GET /profiles for details."
+        ),
     )
     target: str | None = Field(
         default=None,
@@ -211,6 +237,23 @@ class ScanRequest(BaseModel):
         default=False,
         description="Skip PDF generation (faster, terminal results only).",
     )
+
+    @field_validator("profile")
+    @classmethod
+    def _check_profile(cls, v: str) -> str:
+        valid = set(cfg_mod.SCAN_PROFILES.keys())
+        if v not in valid:
+            raise ValueError(
+                f"Profil inconnu : '{v}'. Valeurs valides : {', '.join(sorted(valid))}."
+            )
+        return v
+
+
+class ProfileInfo(BaseModel):
+    name:        str
+    description: str
+    arguments:   str
+    ports:       str | None = None
 
 
 class ScanSummary(BaseModel):
@@ -256,6 +299,9 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         cfg.scan.profile = req.profile
         if req.ports:
             cfg.scan.ports = req.ports
+        elif profile_ports := cfg_mod.SCAN_PROFILES[req.profile].get("ports"):
+            # Use the profile's built-in port list if the caller didn't specify one
+            cfg.scan.ports = profile_ports
 
         # ── Phase 1: Discovery ─────────────────────────────────────────────────
         discovered = discover.discover(
@@ -357,6 +403,25 @@ def health() -> dict:
     return {"status": "ok", "scans_running": running_count}
 
 
+@app.get(
+    "/profiles",
+    tags=["system"],
+    summary="List available scan profiles — no auth required",
+    response_model=list[ProfileInfo],
+)
+def list_profiles() -> list[ProfileInfo]:
+    """Returns all built-in scan profiles with their nmap arguments and optional port overrides."""
+    return [
+        ProfileInfo(
+            name=name,
+            description=p["description"],
+            arguments=p["arguments"],
+            ports=p.get("ports"),
+        )
+        for name, p in cfg_mod.SCAN_PROFILES.items()
+    ]
+
+
 @app.post(
     "/scans",
     tags=["scans"],
@@ -419,7 +484,7 @@ def get_scan(_auth: AuthDep, scan_id: str) -> ScanSummary:
         return ScanSummary(**live)
     entry = _db_get(scan_id)
     if entry is None:
-        raise HTTPException(status_code=404, detail=f"Scan '{scan_id}' not found")
+        raise HTTPException(status_code=404, detail="Scan not found")
     return ScanSummary(**entry)
 
 
@@ -470,13 +535,17 @@ def list_reports(_auth: AuthDep) -> list[ReportEntry]:
     response_class=FileResponse,
 )
 def download_report(_auth: AuthDep, filename: str) -> FileResponse:
-    # Prevent path traversal
+    # Première passe : rejeter les caractères manifestement dangereux
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
     cfg = cfg_mod.Config.load()
-    path = pathlib.Path(cfg.output_dir) / filename
+    output_dir = pathlib.Path(cfg.output_dir).resolve()
+    path = (output_dir / filename).resolve()
+    # Vérification canonique : le chemin résolu doit rester sous output_dir
+    if not str(path).startswith(str(output_dir) + os.sep) and path != output_dir:
+        raise HTTPException(status_code=400, detail="Invalid filename")
     if not path.exists() or path.suffix != ".pdf":
-        raise HTTPException(status_code=404, detail=f"Report '{filename}' not found")
+        raise HTTPException(status_code=404, detail="Report not found")
     return FileResponse(path, media_type="application/pdf", filename=filename)
 
 

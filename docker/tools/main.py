@@ -17,6 +17,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import nmap
 import config as cfg_mod
 import discover
 import exploits
@@ -27,11 +28,7 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
 from rich.table import Table
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
-)
+cfg_mod.setup_logging()
 log = logging.getLogger(__name__)
 
 STATE_DISPLAY = {
@@ -225,13 +222,22 @@ def main() -> None:
                 progress.advance(task_id)
                 try:
                     result = future.result()
+                except nmap.PortScannerError as e:
+                    log.error("Erreur nmap pour %s (vérifier les droits root ou le chemin nmap) : %s", ip, e)
+                    result = None
+                except TimeoutError as e:
+                    log.warning("Timeout scan pour %s : %s", ip, e)
+                    result = None
+                except OSError as e:
+                    log.error("Erreur système lors du scan de %s : %s", ip, e)
+                    result = None
                 except Exception as e:
-                    log.error("Scan échoué pour %s : %s", ip, e)
+                    log.error("Erreur inattendue pour %s [%s] : %s", ip, type(e).__name__, e)
                     result = None
                 if result is not None:
                     scan_results[ip] = result
                 else:
-                    log.warning("Aucun résultat pour %s", ip)
+                    log.info("Hôte %s : aucun port détecté ou inaccessible", ip)
 
     elapsed = time.monotonic() - start
     m, s = divmod(int(elapsed), 60)
@@ -276,6 +282,7 @@ def main() -> None:
         total_ports=n_ports,
         cache=exploit_cache,
         discovered_ips=discovered_hosts,
+        scan_profile=cfg.scan.profile,
     )
     console.print(f"\n[bold green]✓ Rapport généré :[/] {out}")
 

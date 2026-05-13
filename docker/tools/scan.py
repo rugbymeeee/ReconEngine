@@ -10,10 +10,10 @@ import logging
 import os
 import pathlib
 import shutil
+import time
 
 import nmap
-
-from config import SCAN_PROFILES
+from config import FALLBACK_PROFILE, FALLBACK_SCAN_ENABLED, SCAN_PROFILES
 
 log = logging.getLogger(__name__)
 
@@ -58,23 +58,38 @@ def scan_host(
     """
     nm = _get_portscanner()
     args = _scan_args(profile, arguments)
+    t0 = time.monotonic()
     try:
         nm.scan(ip, ports, arguments=args)
     except Exception as e:
         log.error("Scan échoué pour %s : %s", ip, e)
         return None
+    elapsed = time.monotonic() - t0
+    log.debug("Scan '%s' terminé pour %s en %.1fs", profile, ip, elapsed)
     if ip in nm.all_hosts():
+        try:
+            open_count = sum(
+                1 for proto in nm[ip].all_protocols()
+                for port in nm[ip][proto]
+                if nm[ip][proto][port].get("state") == "open"
+            )
+        except Exception:
+            open_count = 0
+        log.info("%-16s  profil=%-8s  durée=%5.1fs  ports_ouverts=%d", ip, profile, elapsed, open_count)
         return nm[ip]
 
-    # Retry avec profil quick si le scan complet n'a rien renvoyé
-    # (timeout hôte, filtrage strict, hôte sur VLAN distant…)
-    if profile == "full" and not arguments:
+    # Retry avec le profil fallback (quick) si le scan principal n'a rien renvoyé.
+    # Utile pour les profils lents (full, stealth, udp) où l'hôte peut être présent
+    # mais timeout sur les scripts ou les sockets UDP.
+    # Désactivable via RECONENGINE_FALLBACK_DISABLED=1.
+    if FALLBACK_SCAN_ENABLED and profile != FALLBACK_PROFILE and not arguments:
         log.warning(
-            "Scan full sans résultat pour %s — retry profil quick (ports ouverts seulement)", ip
+            "Scan '%s' sans résultat pour %s — retry profil '%s' (ports ouverts seulement)",
+            profile, ip, FALLBACK_PROFILE,
         )
         nm2 = _get_portscanner()
         try:
-            nm2.scan(ip, ports, arguments=SCAN_PROFILES["quick"]["arguments"])
+            nm2.scan(ip, ports, arguments=SCAN_PROFILES[FALLBACK_PROFILE]["arguments"])
         except Exception as e:
             log.error("Retry scan échoué pour %s : %s", ip, e)
             return None

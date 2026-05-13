@@ -13,6 +13,19 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+
+# ── Seuils CVSS (source de vérité unique — importés par cve.py et rapport.py) ─
+# Norme FIRST/NVD : Critical ≥ 9.0, High ≥ 7.0, Medium ≥ 4.0, Low ≥ 0.1
+CVSS_THRESHOLDS: list[tuple[float, str, str]] = [
+    (9.0, "critical", "CRITIQUE"),
+    (7.0, "high",     "ELEVE"),
+    (4.0, "medium",   "MODERE"),
+    (0.1, "low",      "FAIBLE"),
+]
+
+# Noms canoniques des niveaux de sévérité (dans l'ordre décroissant)
+SEVERITY_LEVELS: tuple[str, ...] = ("critical", "high", "medium", "low")
+
 # ── Liste de ports prioritaires ────────────────────────────────────────────────
 # Couvre les services les plus exposés en environnement réseau typique.
 # Plus ciblée que 1-3389 : moins de bruit, résultats plus rapides sur matériel embarqué.
@@ -62,7 +75,35 @@ SCAN_PROFILES: dict[str, dict] = {
         # --max-retries  : retry sur perte de paquets (WiFi, réseaux bruyants)
         "arguments": "-sS -sV -O --script vuln,default --script-args mincvss=5.0 -T4 -Pn --host-timeout 300s --max-retries 3",
     },
+    "stealth": {
+        "description": "Scan furtif — rythme lent, randomisé, conçu pour éviter IDS/IPS et logs réseau",
+        # -T1            : timing paranoïaque (délai ~15s entre sondes)
+        # --max-rate 10  : max 10 paquets/s pour rester sous les seuils de détection courants
+        # --randomize-hosts : ordre aléatoire pour éviter les patterns prévisibles
+        # --data-length  : padding aléatoire pour contourner la signature nmap
+        "arguments": "-sS -T1 -n --open -Pn --max-rate 10 --randomize-hosts --data-length 24",
+    },
+    "web": {
+        "description": "Scan web — HTTP/HTTPS, énumération de chemins et scripts de vulnérabilité web",
+        # Restreint aux ports web courants pour aller plus vite
+        # Scripts : titres de pages, méthodes HTTP autorisées, découverte de répertoires
+        "arguments": "-sS -sV --script http-headers,http-title,http-methods,http-enum,http-auth-finder,http-default-accounts -T4 -Pn",
+        # ports override: uniquement les ports web — plus ciblé que DEFAULT_PORTS
+        "ports": "80,443,3000,4443,5000,7001,7443,8000,8080,8443,8888,9000,9090,9200,9443",
+    },
+    "udp": {
+        "description": "Scan UDP — services UDP exposés (DNS, SNMP, TFTP, NTP, SSDP, mDNS…)",
+        # -sU            : mode UDP (nécessite root)
+        # --top-ports 200: les 200 ports UDP les plus courants (compromis vitesse/couverture)
+        # Pas de scripts : les scripts UDP sont très lents
+        "arguments": "-sU --top-ports 200 -T4 -Pn",
+    },
 }
+
+# Clé de profil de fallback utilisée par scan.py si un profil lent ne renvoie aucun résultat.
+# Désactivable via RECONENGINE_FALLBACK_DISABLED=1 (utile sur matériel lent / WiFi instable).
+FALLBACK_PROFILE = "quick"
+FALLBACK_SCAN_ENABLED: bool = os.environ.get("RECONENGINE_FALLBACK_DISABLED", "0") != "1"
 
 # ── Validation helpers ─────────────────────────────────────────────────────────
 _PORT_SPEC_RE = re.compile(r"^(\d+(-\d+)?)(,\d+(-\d+)?)*$")
@@ -184,3 +225,18 @@ class Config:
             raise ValueError(f"max_workers doit être ≥ 1, reçu : {cfg.scan.max_workers}")
 
         return cfg
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    """
+    Configure le logging centralisé pour tous les modules ReconEngine.
+
+    À appeler une seule fois au démarrage (main.py, api.py).
+    Les appels redondants à basicConfig() dans les sous-modules sont sans effet
+    une fois que le root logger est déjà configuré.
+    """
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
+        datefmt="%H:%M:%S",
+    )

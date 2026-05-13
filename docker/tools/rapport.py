@@ -15,12 +15,11 @@ import pathlib
 from concurrent.futures import ThreadPoolExecutor
 from ipaddress import AddressValueError, ip_address
 
-from jinja2 import Environment, FileSystemLoader
-from weasyprint import HTML
-
 import cve as cve_mod
 import exploits as exploit_mod
 import scan as scan_mod
+from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML
 
 log = logging.getLogger(__name__)
 
@@ -70,56 +69,160 @@ _SERVER_INDICATOR_PORTS = {
     3306, 5432, 6379, 8080, 8443, 9200, 27017,
 }
 
-# ── Recommandations par niveau ─────────────────────────────────────────────────
+# ── Recommandations par niveau (langage accessible) ───────────────────────────
 RECOMMENDATIONS = {
     "critical": (
-        "Désactiver ou isoler immédiatement le service. "
-        "Appliquer les correctifs CVE disponibles. "
-        "Analyser les journaux pour toute trace de compromission."
+        "Ce service doit être désactivé ou coupé du réseau immédiatement. "
+        "Contactez votre responsable informatique aujourd'hui et vérifiez "
+        "si des accès suspects ont eu lieu récemment."
     ),
     "high": (
-        "Restreindre l'accès via liste d'autorisation pare-feu. "
-        "Mettre à jour vers la dernière version stable. "
-        "Activer l'authentification forte si possible."
+        "Ce service doit être mis à jour et son accès limité aux seules personnes autorisées. "
+        "Faites appel à votre informaticien pour effectuer les mises à jour et "
+        "bloquer les connexions non nécessaires."
     ),
     "medium": (
-        "Audit de configuration recommandé. "
-        "Surveiller les tentatives d'accès anormales. "
-        "Désactiver si le service est non essentiel."
+        "Ce service mérite une vérification de configuration. "
+        "S'il n'est pas indispensable, désactivez-le. "
+        "Planifiez une revue avec votre équipe informatique dans les deux prochaines semaines."
     ),
-    "low": "Surveillance passive recommandée. Aucune action immédiate requise.",
+    "low": (
+        "Ce point ne nécessite pas d'action immédiate. "
+        "Intégrez-le à votre prochaine maintenance informatique."
+    ),
 }
 
+# Libellés de confiance (affichés dans le rapport)
+CONFIDENCE_LABELS = {
+    "confirmed":  ("Confirmée",  "NVD"),       # CVSS NVD avec version réelle
+    "probable":   ("Probable",   "nmap"),       # scripts nmap / NVD sans version exacte
+    "potential":  ("Potentielle", "searchsploit"),  # matching textuel approximatif
+    "heuristic":  ("Heuristique", "port"),      # classification par port/service uniquement
+}
 
 ACTION_PLAN_MAX_ITEMS = 25
 
-# ── Textes client (non-technique) ─────────────────────────────────────────────
+# ── Noms lisibles des services courants (par port) ────────────────────────────
+_SERVICE_PLAIN_NAMES: dict[int, str] = {
+    20:    "Transfert de fichiers FTP (données)",
+    21:    "Transfert de fichiers non chiffré (FTP)",
+    22:    "Administration à distance sécurisée (SSH)",
+    23:    "Administration à distance non chiffrée (Telnet)",
+    25:    "Serveur de messagerie sortante (SMTP)",
+    53:    "Résolution de noms de domaine (DNS)",
+    67:    "Attribution d'adresses réseau (DHCP)",
+    69:    "Transfert de fichiers simplifié (TFTP)",
+    80:    "Site web non chiffré (HTTP)",
+    110:   "Réception de messagerie (POP3)",
+    111:   "Services réseau à distance (RPC)",
+    135:   "Services Windows à distance (RPC/DCOM)",
+    137:   "Partage réseau Windows (NetBIOS)",
+    139:   "Partage réseau Windows",
+    143:   "Réception de messagerie (IMAP)",
+    389:   "Annuaire d'entreprise (LDAP)",
+    443:   "Site web chiffré (HTTPS)",
+    445:   "Partage de fichiers et imprimantes Windows (SMB)",
+    512:   "Exécution de commandes à distance (rexec)",
+    513:   "Session à distance non chiffrée (rlogin)",
+    514:   "Shell à distance non chiffré (RSH)",
+    587:   "Envoi de messagerie (SMTP soumission)",
+    873:   "Synchronisation de fichiers (rsync)",
+    993:   "Réception de messagerie chiffrée (IMAP)",
+    995:   "Réception de messagerie chiffrée (POP3)",
+    1099:  "Services Java à distance (RMI)",
+    1433:  "Base de données SQL Server (Microsoft)",
+    1521:  "Base de données Oracle",
+    2049:  "Partage de fichiers réseau (NFS)",
+    2375:  "Gestion de conteneurs Docker (non chiffré)",
+    2376:  "Gestion de conteneurs Docker",
+    3306:  "Base de données MySQL / MariaDB",
+    3389:  "Bureau à distance Windows (RDP)",
+    5432:  "Base de données PostgreSQL",
+    5900:  "Contrôle d'écran à distance (VNC)",
+    5901:  "Contrôle d'écran à distance (VNC)",
+    6379:  "Base de données en mémoire (Redis)",
+    8080:  "Application web (port alternatif)",
+    8443:  "Application web chiffrée (port alternatif)",
+    9200:  "Moteur de recherche de données (Elasticsearch)",
+    11211: "Cache mémoire applicatif (Memcached)",
+    27017: "Base de données MongoDB",
+}
+
+# ── Impact métier par niveau de risque ────────────────────────────────────────
+_BUSINESS_IMPACTS = {
+    "critical": (
+        "Un attaquant pourrait prendre le contrôle total de cette machine : "
+        "voler toutes les données, bloquer vos activités ou vous demander une rançon."
+    ),
+    "high": (
+        "Un accès non autorisé à des informations confidentielles est possible, "
+        "ou le fonctionnement du service peut être perturbé."
+    ),
+    "medium": (
+        "Ce point facilite la collecte d'informations sur votre réseau "
+        "et peut ouvrir la voie à d'autres tentatives d'intrusion."
+    ),
+    "low": (
+        "Risque limité dans les conditions actuelles. "
+        "À surveiller lors des prochaines maintenances."
+    ),
+}
+
+# ── Libellés d'urgence ─────────────────────────────────────────────────────────
+_URGENCY_LABELS = {
+    "critical": ("Aujourd'hui",        "#dc2626"),
+    "high":     ("Sous 48 heures",     "#ea580c"),
+    "medium":   ("Sous 2 semaines",    "#d97706"),
+    "low":      ("Prochaine révision", "#059669"),
+}
+
+# ── Textes de synthèse non-technique ──────────────────────────────────────────
 _PLAIN_INTROS = {
     "CRITIQUE": (
-        "L'audit révèle une situation préoccupante : des failles critiques ont été identifiées "
-        "sur votre réseau. Ces vulnérabilités pourraient permettre à une personne malveillante "
-        "d'accéder à vos systèmes, de voler des données sensibles ou de perturber vos activités."
+        "L'audit a révélé des problèmes graves sur votre réseau. "
+        "Des portes d'entrée exploitables par des personnes malveillantes ont été trouvées : "
+        "elles pourraient leur permettre de voler vos données, de prendre le contrôle de vos machines "
+        "ou de bloquer complètement vos activités. Une intervention est nécessaire dès aujourd'hui."
     ),
     "ELEVE": (
-        "L'audit révèle des failles importantes sur votre réseau. "
-        "Plusieurs points nécessitent une attention rapide pour éviter tout incident de sécurité."
+        "L'audit a révélé des failles sérieuses qui exposent votre organisation à un risque réel. "
+        "Ces points ne sont pas encore une urgence absolue, mais des personnes malveillantes "
+        "pourraient en tirer profit rapidement si rien n'est fait. "
+        "Nous recommandons d'agir dans les 48 heures."
     ),
     "MODERE": (
-        "Votre réseau présente un niveau de sécurité convenable, mais quelques points méritent "
-        "attention. Les problèmes identifiés ne sont pas urgents mais doivent être traités "
-        "dans un délai raisonnable."
+        "Votre réseau est globalement bien protégé, mais quelques points méritent attention. "
+        "Les problèmes identifiés n'exposent pas vos données à un danger immédiat, "
+        "mais ils pourraient faciliter une attaque si d'autres failles venaient s'y ajouter. "
+        "Une correction planifiée dans les deux prochaines semaines est recommandée."
     ),
     "FAIBLE": (
         "Votre réseau présente un bon niveau de sécurité. "
-        "L'audit n'a identifié que des risques mineurs pouvant être traités progressivement."
+        "L'audit n'a détecté que des points mineurs, sans risque immédiat pour vos données "
+        "ou vos activités. Ces éléments peuvent être traités lors de votre prochaine maintenance."
     ),
 }
 
 _ACTION_LABELS = {
-    "critical": "Désactiver ou isoler immédiatement ce service. Risque d'intrusion immédiat.",
-    "high":     "Restreindre l'accès réseau à ce service et appliquer les mises à jour disponibles.",
-    "medium":   "Vérifier la configuration du service et désactiver s'il n'est pas indispensable.",
+    "critical": "Désactiver ou couper du réseau immédiatement. Contacter votre informaticien aujourd'hui.",
+    "high":     "Mettre à jour et limiter l'accès à ce service. À faire dans les 48 heures.",
+    "medium":   "Vérifier la configuration et désactiver si le service est inutile. À planifier.",
 }
+
+
+def _plain_service(port: int, pinfo: dict) -> str:
+    """
+    Retourne un nom de service lisible par un non-technicien.
+
+    Priorité : table de noms connus par port → produit nmap → nom de service → "Service inconnu".
+    """
+    if port in _SERVICE_PLAIN_NAMES:
+        return _SERVICE_PLAIN_NAMES[port]
+    product = (pinfo.get("product") or "").strip()
+    version = (pinfo.get("version") or "").strip()
+    name = (pinfo.get("name") or "").strip()
+    label = " ".join(filter(None, [product, version])) or name
+    return label or "Service inconnu"
 
 
 def _plain_summary(
@@ -131,14 +234,31 @@ def _plain_summary(
 ) -> str:
     """Génère un texte d'explication en français simple pour un lecteur non-technique."""
     intro = _PLAIN_INTROS.get(global_risk, _PLAIN_INTROS["FAIBLE"])
-    parts: list[str] = [f"{n_hosts} machine(s) ont été analysées sur ce réseau."]
-    if n_critical:
-        parts.append(
-            f"{n_critical} vulnérabilité(s) critique(s) nécessitent une intervention immédiate."
-        )
+    parts: list[str] = []
+
+    # Formulation naturelle du nombre de machines
+    if n_hosts == 1:
+        parts.append("1 machine a été analysée sur ce réseau.")
+    else:
+        parts.append(f"{n_hosts} machines ont été analysées sur ce réseau.")
+
+    # Critiques
+    if n_critical == 1:
+        parts.append("1 problème critique nécessite une intervention immédiate.")
+    elif n_critical > 1:
+        parts.append(f"{n_critical} problèmes critiques nécessitent une intervention immédiate.")
+
+    # Autres niveaux
+    n_high = risk_dist.get("ELEVE", 0)
+    if n_high == 1:
+        parts.append("1 machine présente un risque élevé.")
+    elif n_high > 1:
+        parts.append(f"{n_high} machines présentent un risque élevé.")
+
     other = n_vulns - n_critical
-    if other > 0:
-        parts.append(f"{other} autre(s) point(s) de sécurité ont également été répertoriés.")
+    if other > 0 and not n_high:
+        parts.append(f"{other} autre(s) point(s) de vigilance ont été relevés.")
+
     return f"{intro} {' '.join(parts)}"
 
 
@@ -155,19 +275,74 @@ def _build_action_plan(hosts: list) -> list:
             sev = v["severity_class"]
             if sev not in _sev_order:
                 continue
+            cve_refs = [
+                c["cve_id"] for c in v.get("cve_list", [])[:3]
+                if isinstance(c, dict) and c.get("cve_id")
+            ]
+            urgency_label, urgency_color = _URGENCY_LABELS.get(sev, ("À planifier", "#64748b"))
             actions.append({
-                "ip":             host["ip"],
-                "port":           v["port"],
-                "service":        v["service"] or f"Port {v['port']}",
-                "severity_class": sev,
-                "severity_text":  v["severity_text"],
-                "action":         _ACTION_LABELS[sev],
-                "has_exploits":   v["exploit_count"] > 0,
+                "ip":              host["ip"],
+                "port":            v["port"],
+                "service":         v["service"] or f"Port {v['port']}",
+                "service_label":   v.get("service_label") or v["service"] or f"Port {v['port']}",
+                "severity_class":  sev,
+                "severity_text":   v["severity_text"],
+                "action":          _ACTION_LABELS[sev],
+                "has_exploits":    v["exploit_count"] > 0,
+                "cve_refs":        cve_refs,
+                "max_cvss":        v.get("max_cvss", 0.0),
+                "business_impact": _BUSINESS_IMPACTS.get(sev, ""),
+                "urgency_label":   urgency_label,
+                "urgency_color":   urgency_color,
             })
     actions.sort(key=lambda a: (_sev_order[a["severity_class"]], a["ip"], a["port"]))
     for i, a in enumerate(actions, 1):
         a["num"] = i
     return actions[:ACTION_PLAN_MAX_ITEMS]
+
+
+def _build_top_open_ports(hosts: list, top_n: int = 10) -> list:
+    """
+    Retourne les N ports ouverts les plus fréquents (tous hôtes confondus).
+
+    Chaque entrée : {"port": int, "service": str, "host_count": int, "severity": str}
+    La sévérité retenue est la plus haute observée pour ce port.
+    """
+    from collections import Counter
+
+    _sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    port_counter: Counter = Counter()
+    port_service: dict[int, str] = {}
+    port_severity: dict[int, str] = {}
+
+    for host in hosts:
+        if host.get("unreachable"):
+            continue
+        seen = set()
+        for v in host.get("vulnerabilities", []):
+            if v["state"] != "open":
+                continue
+            port = v["port"]
+            if port not in seen:
+                seen.add(port)
+                port_counter[port] += 1
+            if port not in port_service:
+                port_service[port] = v.get("service") or str(port)
+            # Retenir la sévérité la plus haute observée pour ce port
+            cur = port_severity.get(port, "low")
+            new = v.get("severity_class", "low")
+            if _sev_order.get(new, 3) < _sev_order.get(cur, 3):
+                port_severity[port] = new
+
+    return [
+        {
+            "port":       port,
+            "service":    port_service.get(port, str(port)),
+            "host_count": count,
+            "severity":   port_severity.get(port, "low"),
+        }
+        for port, count in port_counter.most_common(top_n)
+    ]
 
 
 # ── Fonctions internes ─────────────────────────────────────────────────────────
@@ -177,13 +352,19 @@ def _classify(
     pinfo: dict,
     found_exploits: list,
     cve_data: dict | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """
-    Retourne (severity_class, severity_text) pour un port/service.
+    Retourne (severity_class, severity_text, confidence) pour un port/service.
 
-    Hiérarchie de classification :
+    confidence indique la fiabilité de la classification :
+      - "confirmed"  → CVSS réel depuis NVD avec version vérifiée
+      - "probable"   → CVSS issu de scripts nmap ou NVD sans version exacte
+      - "potential"  → uniquement searchsploit (matching textuel, non vérifié)
+      - "heuristic"  → heuristique port/service (aucune base CVE consultée)
+
+    Hiérarchie de sévérité :
       1. Score CVSS réel (NVD / scripts nmap) — source la plus fiable
-      2. Exploit public searchsploit sans score CVSS → critical (exploitabilité prouvée)
+      2. Exploit public searchsploit → high max (pas critical : matching approximatif)
       3. Port critique ou service à risque élevé → high
       4. Port < 1024 (service privilégié) → medium
       5. Sinon → low
@@ -192,32 +373,75 @@ def _classify(
     state = pinfo.get("state", "")
 
     if state not in ("open", "filtered"):
-        return "low", "FAIBLE"
+        return "low", "FAIBLE", "heuristic"
 
     # ── Priorité 1 : CVSS réel ───────────────────────────────────────────────
     if cve_data and cve_data.get("max_cvss", 0.0) > 0.0:
+        source = cve_data.get("source", "nmap")
+        confidence = "confirmed" if source == "nvd" else "probable"
         sev_class, sev_text = cve_data["severity_class"], cve_data["severity_text"]
         # Un exploit public connu ne peut pas abaisser la sévérité sous "high"
         if found_exploits and sev_class not in ("critical", "high"):
-            return "high", "ELEVE"
-        return sev_class, sev_text
+            return "high", "ELEVE", confidence
+        return sev_class, sev_text, confidence
 
-    # ── Priorité 2 : exploit searchsploit sans score CVSS ───────────────────
+    # ── Priorité 2 : exploit searchsploit (matching textuel, non vérifié) ────
+    # Ne pas classer "critical" sur la base de searchsploit seul : trop de faux
+    # positifs par matching approximatif. → "high" + confidence "potential".
     if found_exploits:
-        return "critical", "CRITIQUE"
+        return "high", "ELEVE", "potential"
 
     # ── Priorité 3 : heuristiques port/service ───────────────────────────────
     if state == "filtered":
         if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
-            return "high", "ELEVE"
-        return "low", "FAIBLE"
+            return "high", "ELEVE", "heuristic"
+        return "low", "FAIBLE", "heuristic"
 
     # state == "open"
     if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
-        return "high", "ELEVE"
+        return "high", "ELEVE", "heuristic"
     if port < 1024:
-        return "medium", "MODERE"
-    return "low", "FAIBLE"
+        return "medium", "MODERE", "heuristic"
+    return "low", "FAIBLE", "heuristic"
+
+
+def _build_recommendation(
+    sev_class: str,
+    product: str,
+    version: str,
+    cve_list: list,
+    confidence: str,
+) -> str:
+    """
+    Génère une recommandation contextuelle en langage accessible.
+
+    Si le logiciel est connu, précise qu'il faut le mettre à jour.
+    Les CVE et scores techniques sont relégués à la note technique.
+    """
+    base = RECOMMENDATIONS[sev_class]
+    extras: list[str] = []
+
+    # Mentionner la mise à jour si le logiciel est identifié
+    if product and version:
+        extras.append(
+            f"Le logiciel \"{product}\" (version {version}) doit être mis à jour "
+            f"vers la dernière version disponible."
+        )
+    elif product:
+        extras.append(
+            f"Vérifiez que le logiciel \"{product}\" est à jour et correctement configuré."
+        )
+
+    # Nombre de failles référencées (sans les IDs techniques)
+    n_cves = len([c for c in cve_list if isinstance(c, dict)])
+    if n_cves == 1:
+        extras.append("1 faille de sécurité officielle a été référencée sur ce service.")
+    elif n_cves > 1:
+        extras.append(f"{n_cves} failles de sécurité officielles ont été référencées sur ce service.")
+
+    if extras:
+        return f"{base} {' '.join(extras)}"
+    return base
 
 
 def _format_service(pinfo: dict) -> str:
@@ -300,7 +524,7 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
         protocols = []
 
     for proto in protocols:
-        for port in data[proto].keys():
+        for port in data[proto]:
             pinfo = data[proto][port]
             state = pinfo.get("state", "")
             if state not in ("open", "filtered"):
@@ -323,30 +547,50 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
             query = _software_query(pinfo)
             found = exploit_mod.find(query, cache=cache)
 
-            sev_class, sev_text = _classify(port, pinfo, found, cve_data)
+            sev_class, sev_text, confidence = _classify(port, pinfo, found, cve_data)
             sev_counts[sev_class] += 1
+
+            if confidence == "potential":
+                log.debug(
+                    "%s:%d — searchsploit match '%s' (%d résultat(s)) — à vérifier manuellement",
+                    ip, port, _software_query(pinfo), len(found),
+                )
 
             svc = _format_service(pinfo)
             svc_key = (pinfo.get("name") or svc or "inconnu").strip().lower()
             services[svc_key] = services.get(svc_key, 0) + 1
 
+            conf_label, conf_source = CONFIDENCE_LABELS.get(confidence, ("?", "?"))
+            recommendation = _build_recommendation(
+                sev_class, product, version, cve_data["cve_list"], confidence
+            )
+            svc_label = _plain_service(port, pinfo)
+            urgency_label, urgency_color = _URGENCY_LABELS.get(sev_class, ("À planifier", "#64748b"))
+
             vulns.append({
-                "port":           port,
-                "protocol":       proto.upper(),
-                "state":          state,
-                "service":        svc,
-                "severity_class": sev_class,
-                "severity_text":  sev_text,
-                "exploit_count":  len(found),
-                "exploits":       [e.get("Title", "?") for e in found[:3]],
-                "recommendation": RECOMMENDATIONS[sev_class],
-                "product":        product,
-                "version":        version,
-                "desc":           _format_service(pinfo),
+                "port":              port,
+                "protocol":          proto.upper(),
+                "state":             state,
+                "service":           svc,
+                "service_label":     svc_label,
+                "severity_class":    sev_class,
+                "severity_text":     sev_text,
+                "confidence":        confidence,
+                "confidence_label":  conf_label,
+                "confidence_source": conf_source,
+                "exploit_count":     len(found),
+                "exploits":          [e.get("Title", "?") for e in found[:3]],
+                "recommendation":    recommendation,
+                "product":           product,
+                "version":           version,
+                "desc":              _format_service(pinfo),
+                "business_impact":   _BUSINESS_IMPACTS.get(sev_class, ""),
+                "urgency_label":     urgency_label,
+                "urgency_color":     urgency_color,
                 # CVE/CVSS
-                "max_cvss":       cve_data["max_cvss"],
-                "cvss_source":    cve_data["source"],
-                "cve_list":       cve_data["cve_list"],
+                "max_cvss":          cve_data["max_cvss"],
+                "cvss_source":       cve_data["source"],
+                "cve_list":          cve_data["cve_list"],
             })
 
     # Tri : ports ouverts d'abord, puis sévérité décroissante
@@ -452,9 +696,9 @@ def _generate_network_map_image(topology: list) -> str:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
-        from matplotlib.patches import FancyBboxPatch, Circle
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle, FancyBboxPatch
     except ImportError:
         log.warning("matplotlib non disponible — cartographie image désactivée.")
         return ""
@@ -533,7 +777,7 @@ def _generate_network_map_image(topology: list) -> str:
             fontsize=7.5, fontweight="bold", color="white", zorder=6)
 
     # ── Sous-réseaux et hôtes ───────────────────────────────────────────────────
-    for i, (net, sx, sw) in enumerate(zip(topology, sub_xs, sub_widths)):
+    for _i, (net, sx, sw) in enumerate(zip(topology, sub_xs, sub_widths, strict=False)):
         net_risk_col = RISK_COL.get(net["risk"], "#64748b")
 
         # Ligne LAN → sous-réseau
@@ -760,6 +1004,54 @@ def build_report_data(
     finally:
         _map_executor.shutdown(wait=False)
 
+    top_open_ports = _build_top_open_ports(hosts)
+
+    # Résumé par urgence (pour la timeline)
+    urgency_summary = {"today": 0, "48h": 0, "2weeks": 0}
+    for a in action_plan:
+        sev = a["severity_class"]
+        if sev == "critical":
+            urgency_summary["today"] += 1
+        elif sev == "high":
+            urgency_summary["48h"] += 1
+        elif sev == "medium":
+            urgency_summary["2weeks"] += 1
+
+    # Prochaines étapes concrètes
+    next_steps: list[str] = []
+    if urgency_summary["today"]:
+        next_steps.append(
+            f"Contacter immédiatement votre responsable informatique "
+            f"pour traiter les {urgency_summary['today']} point(s) critique(s) identifié(s)."
+        )
+    if urgency_summary["48h"]:
+        next_steps.append(
+            f"Dans les 48 heures, planifier la mise à jour et la sécurisation "
+            f"des {urgency_summary['48h']} service(s) à risque élevé."
+        )
+    if urgency_summary["2weeks"]:
+        next_steps.append(
+            f"D'ici deux semaines, effectuer une revue de configuration "
+            f"pour les {urgency_summary['2weeks']} point(s) modérés."
+        )
+    if not next_steps:
+        next_steps.append(
+            "Intégrer les points de vigilance identifiés à votre prochaine maintenance informatique."
+        )
+    next_steps.append(
+        "Conserver ce rapport et le remettre à votre prestataire informatique "
+        "pour mise en œuvre des corrections."
+    )
+
+    # Déduplication des CVE sur tous les hôtes
+    all_cve_ids: set = set()
+    for h in hosts:
+        for v in h.get("vulnerabilities", []):
+            for c in v.get("cve_list", []):
+                if isinstance(c, dict) and c.get("cve_id"):
+                    all_cve_ids.add(c["cve_id"])
+    total_cves = len(all_cve_ids)
+
     target_ips = [h["ip"] for h in all_hosts]
 
     return {
@@ -794,6 +1086,11 @@ def build_report_data(
         "hosts":                  hosts,
         "action_plan":            action_plan,
         "plain_summary":          summary_text,
+        "top_open_ports":         top_open_ports,
+        "total_cves":             total_cves,
+        "scan_profile":           "",
+        "urgency_summary":        urgency_summary,
+        "next_steps":             next_steps,
     }
 
 
@@ -804,6 +1101,7 @@ def generate_report(
     total_ports: int = 100,
     cache: dict | None = None,
     discovered_ips: list | None = None,
+    scan_profile: str = "",
 ) -> str:
     """
     Génère le rapport PDF et retourne son chemin.
@@ -838,6 +1136,8 @@ def generate_report(
     )
     if duration:
         data["duration"] = duration
+    if scan_profile:
+        data["scan_profile"] = scan_profile
 
     env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
     template = env.get_template("report.html")
@@ -852,6 +1152,7 @@ def generate_report(
 
 if __name__ == "__main__":
     import logging as _log
+
     import scan as _scan
     _log.basicConfig(level=_log.INFO, format="%(levelname)s  %(message)s")
     print("Scan de test sur 127.0.0.1...")

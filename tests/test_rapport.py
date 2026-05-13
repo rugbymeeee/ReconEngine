@@ -10,72 +10,92 @@ def test_classify_critical_port_open():
     from rapport import CRITICAL_PORTS, _classify
     port = next(iter(CRITICAL_PORTS))  # pick any critical port
     pinfo = {"state": "open", "name": "ftp"}
-    sev_class, sev_text = _classify(port, pinfo, [], None)
+    sev_class, sev_text, confidence = _classify(port, pinfo, [], None)
     assert sev_class == "high"
     assert sev_text == "ELEVE"
+    assert confidence == "heuristic"
 
 
-def test_classify_exploit_no_cvss_is_critical():
-    """A service with a known exploit but no CVSS score → critical (exploitability proven)."""
+def test_classify_exploit_no_cvss_is_high_potential():
+    """Searchsploit match without CVSS → high (not critical: textual matching, unverified).
+    Confidence must be 'potential' to flag this as needing manual verification.
+    Expert feedback: searchsploit faux positifs peuvent discréditer l'outil si classés CRITIQUE."""
     from rapport import _classify
     pinfo = {"state": "open", "name": "http"}
     fake_exploit = [{"Title": "Apache RCE", "Path": "/some/path"}]
-    sev_class, sev_text = _classify(80, pinfo, fake_exploit, None)
-    assert sev_class == "critical"
-    assert sev_text == "CRITIQUE"
+    sev_class, sev_text, confidence = _classify(80, pinfo, fake_exploit, None)
+    assert sev_class == "high"       # downgraded from critical — avoid false CRITIQUE alarms
+    assert sev_text == "ELEVE"
+    assert confidence == "potential"  # must be flagged as unverified
 
 
 def test_classify_cvss_overrides_heuristic():
     """A CVSS score should override port-based heuristics."""
     from rapport import _classify
     pinfo = {"state": "open", "name": "ssh"}
-    cve_data = {"max_cvss": 9.8, "severity_class": "critical", "severity_text": "CRITIQUE"}
-    sev_class, _ = _classify(22, pinfo, [], cve_data)
+    cve_data = {"max_cvss": 9.8, "severity_class": "critical", "severity_text": "CRITIQUE", "source": "nvd"}
+    sev_class, _, confidence = _classify(22, pinfo, [], cve_data)
     assert sev_class == "critical"
+    assert confidence == "confirmed"
+
+
+def test_classify_nmap_script_cvss_is_probable():
+    """CVSS from nmap scripts (not NVD) → confidence 'probable'."""
+    from rapport import _classify
+    pinfo = {"state": "open", "name": "http"}
+    cve_data = {"max_cvss": 7.5, "severity_class": "high", "severity_text": "ELEVE", "source": "nmap"}
+    sev_class, _, confidence = _classify(80, pinfo, [], cve_data)
+    assert sev_class == "high"
+    assert confidence == "probable"
 
 
 def test_classify_low_port_no_exploit_medium():
     """Privileged port (<1024), open, no exploit, no CVE → medium."""
     from rapport import _classify
     pinfo = {"state": "open", "name": "unknown-service"}
-    sev_class, sev_text = _classify(999, pinfo, [], None)
+    sev_class, sev_text, confidence = _classify(999, pinfo, [], None)
     assert sev_class == "medium"
     assert sev_text == "MODERE"
+    assert confidence == "heuristic"
 
 
 def test_classify_high_port_no_data_low():
     """Non-privileged port (≥1024), no exploit, no CVE, not a critical port → low."""
     from rapport import _classify
     pinfo = {"state": "open", "name": "unknown"}
-    sev_class, sev_text = _classify(50000, pinfo, [], None)
+    sev_class, sev_text, confidence = _classify(50000, pinfo, [], None)
     assert sev_class == "low"
     assert sev_text == "FAIBLE"
+    assert confidence == "heuristic"
 
 
 def test_classify_closed_state_always_low():
     """Closed ports should be low regardless of port number."""
     from rapport import _classify
     pinfo = {"state": "closed", "name": "ms-wbt-server"}
-    sev_class, _ = _classify(3389, pinfo, [], None)
+    sev_class, _, confidence = _classify(3389, pinfo, [], None)
     assert sev_class == "low"
+    assert confidence == "heuristic"
 
 
 def test_classify_filtered_critical_port_high():
     """Filtered critical port → high (still a risk)."""
     from rapport import _classify
     pinfo = {"state": "filtered", "name": "ftp"}
-    sev_class, _ = _classify(21, pinfo, [], None)
+    sev_class, _, confidence = _classify(21, pinfo, [], None)
     assert sev_class == "high"
+    assert confidence == "heuristic"
 
 
 def test_classify_exploit_with_medium_cvss_stays_high():
     """If CVSS is medium but there's an exploit, severity must be at least high."""
     from rapport import _classify
     pinfo = {"state": "open", "name": "http"}
-    cve_data = {"max_cvss": 5.5, "severity_class": "medium", "severity_text": "MODERE"}
+    cve_data = {"max_cvss": 5.5, "severity_class": "medium", "severity_text": "MODERE", "source": "nvd"}
     fake_exploit = [{"Title": "Some exploit"}]
-    sev_class, _ = _classify(80, pinfo, fake_exploit, cve_data)
+    sev_class, _, confidence = _classify(80, pinfo, fake_exploit, cve_data)
     assert sev_class == "high"
+    assert confidence == "confirmed"
 
 
 # ── _risk_from_counts ──────────────────────────────────────────────────────────

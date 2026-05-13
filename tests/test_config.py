@@ -93,6 +93,42 @@ def test_scan_profiles_have_required_keys():
         assert "-Pn" in profile["arguments"], f"{name} should include -Pn"
 
 
+def test_all_builtin_profiles_present():
+    from config import SCAN_PROFILES
+    assert set(SCAN_PROFILES.keys()) >= {"quick", "full", "stealth", "web", "udp"}
+
+
+def test_stealth_profile_uses_low_rate():
+    from config import SCAN_PROFILES
+    args = SCAN_PROFILES["stealth"]["arguments"]
+    assert "--max-rate" in args
+    assert "-T1" in args
+
+
+def test_web_profile_has_port_override():
+    from config import SCAN_PROFILES
+    assert "ports" in SCAN_PROFILES["web"]
+    ports = SCAN_PROFILES["web"]["ports"]
+    assert "443" in ports
+    assert "80" in ports
+
+
+def test_udp_profile_uses_sU():
+    from config import SCAN_PROFILES
+    assert "-sU" in SCAN_PROFILES["udp"]["arguments"]
+
+
+def test_fallback_profile_is_quick():
+    from config import FALLBACK_PROFILE
+    assert FALLBACK_PROFILE == "quick"
+
+
+def test_validate_profile_accepts_all_builtins():
+    from config import SCAN_PROFILES, _validate_profile
+    for name in SCAN_PROFILES:
+        assert _validate_profile(name) == name
+
+
 # ── Validation helpers ─────────────────────────────────────────────────────────
 
 def test_validate_ports_single():
@@ -160,3 +196,115 @@ def test_validate_timeout_bounds():
         _validate_timeout(0)
     with pytest.raises(ValueError):
         _validate_timeout(301)
+
+
+# ── Nouveaux edge cases ────────────────────────────────────────────────────────
+
+def test_toml_config_valid(tmp_path, monkeypatch):
+    """Un fichier TOML valide est chargé correctement."""
+    toml = tmp_path / "reconengine.toml"
+    toml.write_text('[scan]\nprofile = "quick"\nmax_workers = 2\n')
+    monkeypatch.setenv("RECONENGINE_CONFIG", str(toml))
+    from config import Config
+    cfg = Config.load()
+    assert cfg.scan.profile == "quick"
+    assert cfg.scan.max_workers == 2
+
+
+def test_toml_config_invalid_profile_raises(tmp_path, monkeypatch):
+    """Un profil invalide dans le TOML déclenche SystemExit."""
+    toml = tmp_path / "reconengine.toml"
+    toml.write_text('[scan]\nprofile = "turbomax"\n')
+    monkeypatch.setenv("RECONENGINE_CONFIG", str(toml))
+    from config import Config
+    with pytest.raises(SystemExit):
+        Config.load()
+
+
+def test_toml_config_invalid_workers_raises(tmp_path, monkeypatch):
+    """max_workers=0 dans le TOML déclenche SystemExit."""
+    toml = tmp_path / "reconengine.toml"
+    toml.write_text('[scan]\nmax_workers = 0\n')
+    monkeypatch.setenv("RECONENGINE_CONFIG", str(toml))
+    from config import Config
+    with pytest.raises(SystemExit):
+        Config.load()
+
+
+def test_toml_config_missing_file_logs_warning(tmp_path, monkeypatch, caplog):
+    """Un chemin RECONENGINE_CONFIG inexistant log un warning sans planter."""
+    monkeypatch.setenv("RECONENGINE_CONFIG", str(tmp_path / "missing.toml"))
+    import logging
+    from config import Config
+    with caplog.at_level(logging.WARNING, logger="config"):
+        cfg = Config.load()
+    assert cfg.scan.profile == "full"   # defaults preserved
+    assert any("introuvable" in r.message for r in caplog.records)
+
+
+def test_env_max_workers_boundary_min(monkeypatch):
+    """max_workers=1 est accepté."""
+    monkeypatch.setenv("RECONENGINE_MAX_WORKERS", "1")
+    from config import Config
+    assert Config.load().scan.max_workers == 1
+
+
+def test_env_max_workers_boundary_max(monkeypatch):
+    """max_workers=64 est accepté."""
+    monkeypatch.setenv("RECONENGINE_MAX_WORKERS", "64")
+    from config import Config
+    assert Config.load().scan.max_workers == 64
+
+
+def test_env_max_workers_out_of_range_silently_ignored(monkeypatch):
+    """max_workers=65 est hors plage — ignoré silencieusement, défaut conservé."""
+    monkeypatch.setenv("RECONENGINE_MAX_WORKERS", "65")
+    from config import Config
+    assert Config.load().scan.max_workers == 8
+
+
+def test_env_discovery_timeout_boundary(monkeypatch):
+    """discovery_timeout=1 et =300 sont acceptés."""
+    for v in ("1", "300"):
+        monkeypatch.setenv("RECONENGINE_DISCOVERY_TIMEOUT", v)
+        from config import Config
+        cfg = Config.load()
+        assert cfg.scan.discovery_timeout == int(v)
+
+
+def test_env_discovery_timeout_out_of_range_ignored(monkeypatch):
+    """discovery_timeout=0 est hors plage — ignoré, défaut conservé."""
+    monkeypatch.setenv("RECONENGINE_DISCOVERY_TIMEOUT", "0")
+    from config import Config
+    assert Config.load().scan.discovery_timeout == 5
+
+
+def test_cvss_thresholds_exported():
+    """CVSS_THRESHOLDS doit être exporté depuis config et contenir les 4 niveaux."""
+    from config import CVSS_THRESHOLDS
+    levels = {cls for _, cls, _ in CVSS_THRESHOLDS}
+    assert levels == {"critical", "high", "medium", "low"}
+
+
+def test_fallback_scan_enabled_default(monkeypatch):
+    """FALLBACK_SCAN_ENABLED est True par défaut."""
+    monkeypatch.delenv("RECONENGINE_FALLBACK_DISABLED", raising=False)
+    # Recharger le module pour refléter l'env
+    import importlib, config as cfg_module
+    importlib.reload(cfg_module)
+    assert cfg_module.FALLBACK_SCAN_ENABLED is True
+
+
+def test_fallback_scan_disabled_via_env(monkeypatch):
+    """RECONENGINE_FALLBACK_DISABLED=1 désactive le fallback."""
+    monkeypatch.setenv("RECONENGINE_FALLBACK_DISABLED", "1")
+    import importlib, config as cfg_module
+    importlib.reload(cfg_module)
+    assert cfg_module.FALLBACK_SCAN_ENABLED is False
+
+
+def test_setup_logging_does_not_raise():
+    """setup_logging() ne lève pas d'exception même si appelée plusieurs fois."""
+    from config import setup_logging
+    setup_logging()
+    setup_logging()  # second call is a no-op for basicConfig

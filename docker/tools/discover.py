@@ -21,9 +21,8 @@ try:
 except ImportError:
     _HAS_FCNTL = False  # Windows — _get_netmask() retourne None, fallback /24
 
-from scapy.all import arping, get_if_addr, get_if_list
-
 import scan
+from scapy.all import arping, get_if_addr, get_if_list
 
 log = logging.getLogger(__name__)
 
