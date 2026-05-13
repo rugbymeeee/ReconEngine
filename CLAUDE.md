@@ -17,7 +17,7 @@ cd docker/tools
 python main.py                        # profil par défaut (full)
 python main.py quick                  # scan rapide, sans scripts vuln
 python main.py full -t 192.168.1.0/24 # réseau ciblé
-python main.py -i eth0 --ports 22,80,443,8080 -o /tmp/audit.pdf
+python main.py -i wlan1 --ports 22,80,443,8080 -o /tmp/audit.pdf  # wlan1 = RTL8188EUS (audit)
 
 # Variables d'environnement
 RECONENGINE_PROFILE=quick|full
@@ -84,6 +84,15 @@ discover.py  ──→  scan.py (ThreadPoolExecutor)  ──→  rapport.py  ─
 - `ThreadPoolExecutor(max_workers=cfg.scan.max_workers)` pour scanner plusieurs hôtes simultanément
 - `exploit_cache: dict` partagé entre `render_host()` et `rapport.generate_report()` pour éviter les appels searchsploit dupliqués
 - Rich `Progress` avec barre pendant le scan
+- Notifie `status.set_state(...)` aux transitions de phase pour piloter les LEDs du PCB
+
+**`status.py`** — Pilote LED du PCB (Orange Pi Zero 3)
+- Drive 2× WS2812B (LED1/LED2) via SPI MOSI + 2× LEDs discrètes (LED3/LED4) via libgpiod
+- Singleton thread-safe ; thread daemon pour animations (pulse, chase, blink)
+- États : IDLE / DISCOVERING / SCANNING / REPORTING / DONE_OK / DONE_CRITICAL / ERROR
+- **Fail-safe** : si `gpiod`/`spidev` non installés ou `/dev/gpiochip0`//`/dev/spidev1.0` absents, devient no-op silencieux (dev machine, container sans device)
+- Dépendances optionnelles : `pip install reconengine[hardware]`
+- Override pins via env : `RECONENGINE_LED_GREEN_GPIO`, `RECONENGINE_LED_YELLOW_GPIO`, `RECONENGINE_WS2812_SPI`
 
 ### Template PDF
 - `docker/tools/templates/report.html` (Jinja2 + WeasyPrint)

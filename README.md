@@ -26,7 +26,7 @@ pip install "fastapi>=0.111" "uvicorn[standard]>=0.30" "pydantic>=2.7"
 sudo python tools/main.py                         # full profile, auto-detect network
 sudo python tools/main.py quick                   # fast scan, no vuln scripts
 sudo python tools/main.py full -t 192.168.1.0/24  # targeted CIDR
-sudo python tools/main.py -i wlan0 --ports 22,80,443,8080
+sudo python tools/main.py -i wlan1 --ports 22,80,443,8080  # wlan1 = RTL8188EUS (audit)
 
 # HTTP API server (port 8000)
 sudo python tools/api.py
@@ -43,7 +43,7 @@ docker compose up --build
 curl -X POST http://localhost:8000/scans \
   -H "X-API-Key: changeme" \
   -H "Content-Type: application/json" \
-  -d '{"profile": "full", "iface": "eth0"}'
+  -d '{"profile": "full", "iface": "wlan1"}'
 
 # Poll status
 curl http://localhost:8000/scans/{scan_id} -H "X-API-Key: changeme"
@@ -64,7 +64,11 @@ All settings can be overridden by environment variables (highest priority) or a 
 | `RECONENGINE_OUTPUT_DIR` | `rapports` | Directory for generated PDF reports |
 | `RECONENGINE_MAX_WORKERS` | `8` | Parallel scan threads |
 | `RECONENGINE_DISCOVERY_TIMEOUT` | `5` | ARP discovery timeout (seconds) |
-| `RECONENGINE_IFACE` | auto | Network interface (`eth0`, `wlan0`, …) |
+| `RECONENGINE_IFACE` | auto | Network interface (`wlan1` = RTL8188EUS audit, `wlan0` = onboard WiFi mgmt, `end0`/`eth0` = onboard Ethernet) |
+| `RECONENGINE_LED_ENABLED` | `1` | Pilote LED du PCB (0 pour désactiver même si le matériel est présent) |
+| `RECONENGINE_LED_GREEN_GPIO` | `76` | Offset libgpiod de la LED verte (LED4) |
+| `RECONENGINE_LED_YELLOW_GPIO` | `71` | Offset libgpiod de la LED jaune (LED3) |
+| `RECONENGINE_WS2812_SPI` | `/dev/spidev1.0` | Chemin SPI vers le DIN des WS2812B (LED1/LED2) |
 | `RECONENGINE_API_KEY` | `changeme` | API key for HTTP server (**change in production!**) |
 | `RECONENGINE_CONFIG` | — | Path to TOML config file |
 | `NVD_API_KEY` | — | NVD API key — 50 req/30s vs 5 req/30s without |

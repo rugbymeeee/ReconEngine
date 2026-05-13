@@ -46,6 +46,7 @@ import config as cfg_mod  # noqa: E402
 import discover  # noqa: E402
 import rapport  # noqa: E402
 import scan  # noqa: E402
+import status as led_status  # noqa: E402
 
 cfg_mod.setup_logging()
 log = logging.getLogger(__name__)
@@ -110,7 +111,12 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
             error="Process restarted while scan was running",
         )
         log.warning("Marked orphaned scan %s as error", row["scan_id"])
-    yield  # application runs here
+    # API en attente — LEDs en idle
+    led_status.set_state(led_status.State.IDLE)
+    try:
+        yield  # application runs here
+    finally:
+        led_status.shutdown()
 
 
 app = FastAPI(
@@ -304,6 +310,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             cfg.scan.ports = profile_ports
 
         # ── Phase 1: Discovery ─────────────────────────────────────────────────
+        led_status.set_state(led_status.State.DISCOVERING)
         discovered = discover.discover(
             iface=req.iface or os.environ.get("RECONENGINE_IFACE") or None,
             network=req.target,
@@ -314,6 +321,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         log.info("[%s] Discovered %d host(s)", scan_id, len(ips))
 
         if not ips:
+            led_status.set_state(led_status.State.DONE_OK)
             _persist(
                 status=ScanStatus.DONE,
                 finished_at=datetime.datetime.now().isoformat(),
@@ -326,6 +334,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         # ── Phase 2: Parallel scan ─────────────────────────────────────────────
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        led_status.set_state(led_status.State.SCANNING)
         exploit_cache: dict = {}
         scan_results: dict = {}
         t0 = time.monotonic()
@@ -354,6 +363,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         # ── Phase 3 (optional): PDF report ────────────────────────────────────
         report_file = None
         if scan_results and not req.no_pdf:
+            led_status.set_state(led_status.State.REPORTING)
             import main as main_mod
             n_ports = main_mod._port_count(cfg.scan.ports)
             ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -372,6 +382,29 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             except Exception as exc:
                 log.error("[%s] PDF generation failed: %s", scan_id, exc)
 
+        # Final LED state — critique si ≥1 port critique ouvert, sinon OK
+        _any_critical = False
+        for _data in scan_results.values():
+            try:
+                for _proto in _data.all_protocols():
+                    for _port in _data[_proto]:
+                        _pi = _data[_proto][_port]
+                        if _pi.get("state") != "open":
+                            continue
+                        if (_port in rapport.CRITICAL_PORTS
+                                or (_pi.get("name") or "").lower() in rapport.HIGH_RISK_SERVICES):
+                            _any_critical = True
+                            break
+                    if _any_critical:
+                        break
+            except Exception:
+                continue
+            if _any_critical:
+                break
+        led_status.set_state(
+            led_status.State.DONE_CRITICAL if _any_critical else led_status.State.DONE_OK
+        )
+
         _persist(
             status=ScanStatus.DONE,
             finished_at=datetime.datetime.now().isoformat(),
@@ -383,6 +416,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
     except Exception as exc:
         log.exception("[%s] Scan error: %s", scan_id, exc)
+        led_status.set_state(led_status.State.ERROR)
         _persist(
             status=ScanStatus.ERROR,
             finished_at=datetime.datetime.now().isoformat(),

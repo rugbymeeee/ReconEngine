@@ -23,6 +23,7 @@ import discover
 import exploits
 import rapport
 import scan
+import status
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
@@ -179,16 +180,24 @@ def main() -> None:
 
     # ── Phase 1 : Découverte ───────────────────────────────────────────────────
     start = time.monotonic()
+    status.set_state(status.State.DISCOVERING)
     console.print("\n[bold]Phase 1[/] — Découverte des hôtes")
-    discovered_hosts = discover.discover(
-        iface=args.iface,
-        network=args.target,
-        timeout=cfg.scan.discovery_timeout,
-    )
+    try:
+        discovered_hosts = discover.discover(
+            iface=args.iface,
+            network=args.target,
+            timeout=cfg.scan.discovery_timeout,
+        )
+    except Exception:
+        status.set_state(status.State.ERROR)
+        status.shutdown()
+        raise
     ips = [h["ip"] for h in discovered_hosts]
 
     if not ips:
+        status.set_state(status.State.ERROR)
         console.print("[red]Aucun hôte découvert. Vérifiez les droits root et l'interface réseau.[/]")
+        status.shutdown()
         sys.exit(0)
 
     console.print(f"[green]{len(ips)} hôte(s) découvert(s)[/] — lancement du scan...")
@@ -197,6 +206,7 @@ def main() -> None:
     exploit_cache: dict = {}
     scan_results: dict = {}
 
+    status.set_state(status.State.SCANNING)
     console.print(
         f"\n[bold]Phase 2[/] — Scan des ports "
         f"([cyan]{cfg.scan.max_workers}[/] thread(s) parallèle(s))"
@@ -260,31 +270,70 @@ def main() -> None:
             console.print(f"  [dim]⊘ {ip}[/]  [red]aucune réponse au scan TCP[/]")
 
     if not scan_results:
+        status.set_state(status.State.ERROR)
         console.print("[yellow]Aucun résultat à reporter.[/]")
+        status.shutdown()
         sys.exit(0)
 
     console.print(f"[dim]Durée totale : {duration}[/]")
 
+    # Indicateur final basé sur la sévérité max trouvée
+    def _set_final_state() -> None:
+        any_critical = False
+        for data in scan_results.values():
+            try:
+                for proto in data.all_protocols():
+                    for port in data[proto]:
+                        pinfo = data[proto][port]
+                        if pinfo.get("state") != "open":
+                            continue
+                        # Port critique ou service à risque élevé → flag critical
+                        if (port in rapport.CRITICAL_PORTS
+                                or (pinfo.get("name") or "").lower() in rapport.HIGH_RISK_SERVICES):
+                            any_critical = True
+                            break
+                    if any_critical:
+                        break
+            except Exception:
+                continue
+            if any_critical:
+                break
+        status.set_state(status.State.DONE_CRITICAL if any_critical else status.State.DONE_OK)
+
     if args.no_pdf:
+        _set_final_state()
         console.print("[dim]Option --no-pdf : génération du rapport PDF ignorée.[/]")
+        # On laisse les LEDs allumées un instant pour que le statut soit visible
+        time.sleep(2)
+        status.shutdown()
         sys.exit(0)
 
     # ── Phase 4 : Rapport PDF ──────────────────────────────────────────────────
+    status.set_state(status.State.REPORTING)
     console.print("\n[bold]Phase 4[/] — Génération du rapport PDF")
     n_ports = _port_count(cfg.scan.ports)
     output_path = args.output or (
         f"{cfg.output_dir}/Rapport_Audit_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
     )
-    out = rapport.generate_report(
-        scan_results,
-        output_path=output_path,
-        duration=duration,
-        total_ports=n_ports,
-        cache=exploit_cache,
-        discovered_ips=discovered_hosts,
-        scan_profile=cfg.scan.profile,
-    )
+    try:
+        out = rapport.generate_report(
+            scan_results,
+            output_path=output_path,
+            duration=duration,
+            total_ports=n_ports,
+            cache=exploit_cache,
+            discovered_ips=discovered_hosts,
+            scan_profile=cfg.scan.profile,
+        )
+    except Exception:
+        status.set_state(status.State.ERROR)
+        status.shutdown()
+        raise
+    _set_final_state()
     console.print(f"\n[bold green]✓ Rapport généré :[/] {out}")
+    # Garder le statut final visible avant de rendre la main
+    time.sleep(2)
+    status.shutdown()
 
 
 if __name__ == "__main__":
