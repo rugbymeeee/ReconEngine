@@ -13,6 +13,7 @@ Usage :
 import argparse
 import datetime
 import logging
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -184,7 +185,7 @@ def main() -> None:
     console.print("\n[bold]Phase 1[/] — Découverte des hôtes")
     try:
         discovered_hosts = discover.discover(
-            iface=args.iface,
+            iface=args.iface or os.environ.get("RECONENGINE_IFACE") or None,
             network=args.target,
             timeout=cfg.scan.discovery_timeout,
         )

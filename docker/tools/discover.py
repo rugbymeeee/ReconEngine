@@ -221,6 +221,9 @@ def discover(
             k: v for k, v in networks.items()
             if not iface or v["iface"] == iface
         }
+        if not filtered:
+            log.warning("Interface '%s' introuvable ou sans IP.", iface)
+            return []
         with ThreadPoolExecutor(max_workers=min(len(filtered), 4)) as ex:
             futures = {ex.submit(_scan_iface, k, v): k for k, v in filtered.items()}
             for fut in as_completed(futures):

@@ -25,11 +25,13 @@ Variables d'environnement :
   RECONENGINE_LED_GREEN_GPIO     Offset libgpiod LED verte  (défaut: 76)
   RECONENGINE_LED_GPIOCHIP       Chemin chip       (défaut: /dev/gpiochip0)
   RECONENGINE_WS2812_SPI         Chemin SPI        (défaut: /dev/spidev1.0)
+    RECONENGINE_WS2812_SPI_HZ      SPI frequency     (defaut: 6400000)
 """
 from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from enum import Enum
@@ -57,7 +59,18 @@ _SPI_PATH      = os.environ.get("RECONENGINE_WS2812_SPI",   "/dev/spidev1.0")
 # WS2812B over SPI : 4 bits SPI par bit WS2812B
 # SPI @ 6.4 MHz → période = 156 ns ; 4 bits = 625 ns par bit WS2812B (1.6 MHz)
 # Encodage : "0" → 0b1000, "1" → 0b1110 (T0H≈156ns, T1H≈468ns — dans la tolérance)
-_SPI_HZ        = 6_400_000
+def _parse_spi_hz(default: int) -> int:
+    raw = os.environ.get("RECONENGINE_WS2812_SPI_HZ", "").strip()
+    if not raw:
+        return default
+    try:
+        hz = int(raw)
+        return hz if hz > 0 else default
+    except ValueError:
+        return default
+
+
+_SPI_HZ        = _parse_spi_hz(6_400_000)
 _WS_RESET_BYTES = 50  # > 50 µs de 0 pour latcher les couleurs
 
 _COLOR = {
@@ -166,9 +179,12 @@ class _Neo:
             return
         try:
             # /dev/spidev1.0 → bus=1, device=0
-            parts = _SPI_PATH.rsplit(".", 1)
-            bus = int(parts[0][-1])
-            dev = int(parts[1])
+            m = re.match(r"^/dev/spidev(\d+)\.(\d+)$", _SPI_PATH)
+            if not m:
+                log.debug("[status] SPI path invalide: %s", _SPI_PATH)
+                return
+            bus = int(m.group(1))
+            dev = int(m.group(2))
             self._dev = spidev.SpiDev()
             self._dev.open(bus, dev)
             self._dev.max_speed_hz = _SPI_HZ

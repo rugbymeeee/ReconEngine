@@ -60,12 +60,12 @@ def _sanitize_nvd_keyword(s: str) -> str:
 # ── Regex de parsing scripts nmap ─────────────────────────────────────────────
 # Format vulners : "CVE-XXXX-YYYY<TAB>9.8<TAB>https://..."
 _RE_CVE_SCORE = re.compile(
-    r"(CVE-\d{4}-\d{4,})\s+([\d]+\.[\d]+)",
+    r"(CVE-\d{4}-\d{4,})\s+(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 # Format générique : "CVSS: 7.5" / "CVSSv3: 9.8" / "CVSS Score: 6.5"
 _RE_CVSS_GENERIC = re.compile(
-    r"CVSS\s*(?:v\d(?:\.\d)?)?\s*(?:Score)?\s*:\s*([\d]+\.[\d]+)",
+    r"CVSS\s*(?:v\d(?:\.\d)?)?\s*(?:Score)?\s*:\s*(\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 # "Risk factor: High"
@@ -238,6 +238,45 @@ def _process_nvd_raw(raw: list) -> list[dict]:
     return results
 
 
+def _get_cached_nvd(cache: dict, cache_key: str, keyword: str) -> list[dict]:
+    """Thread-safe cached fetch for NVD entries by keyword."""
+    with _cache_lock:
+        cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if not _nvd_is_available():
+        with _cache_lock:
+            cache[cache_key] = []
+        return []
+
+    leader = False
+    with _inflight_lock:
+        event = _inflight.get(cache_key)
+        if event is None:
+            event = threading.Event()
+            _inflight[cache_key] = event
+            leader = True
+
+    if not leader:
+        event.wait()
+        with _cache_lock:
+            return cache.get(cache_key, [])
+
+    results: list[dict] = []
+    try:
+        results = _process_nvd_raw(_nvd_fetch(keyword))
+    except Exception as e:
+        log.debug("NVD processing failed for '%s': %s", keyword, e)
+    finally:
+        with _cache_lock:
+            cache[cache_key] = results
+        with _inflight_lock:
+            _inflight.pop(cache_key, None)
+            event.set()
+    return results
+
+
 def query_nvd(product: str, version: str, cache: dict) -> list[dict]:
     """
     Interroge l'API NVD pour ``product version`` et retourne les CVEs pertinents.
@@ -277,34 +316,45 @@ def query_nvd(product: str, version: str, cache: dict) -> list[dict]:
             cache[cache_key] = []
         return []
 
-    # Appel réseau hors du lock (opération lente — ne pas bloquer les autres threads)
-    results = _process_nvd_raw(_nvd_fetch(keyword_full))
+    # Dédoublonnage des appels concurrentiels pour la même clé
+    leader = False
+    with _inflight_lock:
+        event = _inflight.get(cache_key)
+        if event is None:
+            event = threading.Event()
+            _inflight[cache_key] = event
+            leader = True
 
-    # Si version précise mais peu de résultats, compléter avec product seul
-    if version_clean and len(results) < 3:
-        cache_key_base = f"nvd:{product_clean.lower()}"
-
+    if not leader:
+        event.wait()
         with _cache_lock:
-            base_cached = cache.get(cache_key_base)
+            return cache.get(cache_key, [])
 
-        if base_cached is None:
-            # Appel réseau hors du lock
-            base_results = _process_nvd_raw(_nvd_fetch(product_clean))
-            with _cache_lock:
-                # Double-check : un autre thread a peut-être écrit entre-temps
-                if cache_key_base not in cache:
-                    cache[cache_key_base] = base_results
-                base_cached = cache[cache_key_base]
+    results: list[dict] = []
+    try:
+        # Appel réseau hors du lock (opération lente — ne pas bloquer les autres threads)
+        results = _process_nvd_raw(_nvd_fetch(keyword_full))
 
-        # Fusionner en déduplicant par cve_id
-        seen_ids = {e["cve_id"] for e in results}
-        for item in base_cached:
-            if item["cve_id"] not in seen_ids:
-                results.append(item)
-        results.sort(key=lambda x: -x["cvss"])
+        # Si version précise mais peu de résultats, compléter avec product seul
+        if version_clean and len(results) < 3:
+            cache_key_base = f"nvd:{product_clean.lower()}"
+            base_cached = _get_cached_nvd(cache, cache_key_base, product_clean)
 
-    with _cache_lock:
-        cache[cache_key] = results
+            # Fusionner en déduplicant par cve_id
+            seen_ids = {e["cve_id"] for e in results}
+            for item in base_cached:
+                if item["cve_id"] not in seen_ids:
+                    results.append(item)
+            results.sort(key=lambda x: -x["cvss"])
+    except Exception as e:
+        log.debug("NVD query failed for '%s': %s", keyword_full, e)
+        results = []
+    finally:
+        with _cache_lock:
+            cache[cache_key] = results
+        with _inflight_lock:
+            _inflight.pop(cache_key, None)
+            event.set()
 
     if results:
         log.debug(
