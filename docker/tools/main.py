@@ -18,10 +18,10 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import nmap
 import config as cfg_mod
 import discover
 import exploits
+import nmap
 import rapport
 import scan
 import status

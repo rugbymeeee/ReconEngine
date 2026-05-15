@@ -18,8 +18,9 @@ from ipaddress import AddressValueError, ip_address
 import cve as cve_mod
 import exploits as exploit_mod
 import scan as scan_mod
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weasyprint import HTML
+from weasyprint.urls import URLFetchingError, default_url_fetcher
 
 log = logging.getLogger(__name__)
 
@@ -208,6 +209,396 @@ _ACTION_LABELS = {
     "high":     "Mettre à jour et limiter l'accès à ce service. À faire dans les 48 heures.",
     "medium":   "Vérifier la configuration et désactiver si le service est inutile. À planifier.",
 }
+
+# ── Guide de remédiation ───────────────────────────────────────────────────────
+# Base de connaissances : instructions concrètes par port / service.
+# Clés : int (port) en priorité, str (nom de service nmap) en fallback.
+REMEDIATION_GUIDE: dict = {
+    # ── Protocoles d'administration non chiffrés ───────────────────────────────
+    21: {
+        "titre":       "FTP — Transfert de fichiers sans chiffrement",
+        "probleme":    "Ce service transmet les mots de passe et les fichiers en clair sur le réseau.",
+        "danger":      "N'importe qui connecté au même réseau peut lire vos identifiants et vos fichiers sans effort.",
+        "etapes": [
+            "Désactiver le service FTP sur le serveur (Panneau de configuration → Outils d'administration → Services → arrêter 'FTP').",
+            "Le remplacer par SFTP ou FTPS si des transferts de fichiers sont nécessaires — votre hébergeur ou prestataire peut configurer cela.",
+            "Si FTP doit rester actif temporairement, le restreindre à certaines adresses IP uniquement via le pare-feu.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Prestataire informatique / Administrateur système",
+    },
+    22: {
+        "titre":       "SSH — Accès à distance (vérifier la configuration)",
+        "probleme":    "L'accès à distance SSH est exposé sur le réseau avec une version potentiellement ancienne.",
+        "danger":      "Une configuration par défaut ou une version obsolète peut permettre à un attaquant de se connecter à distance.",
+        "etapes": [
+            "Mettre à jour le système d'exploitation pour obtenir la dernière version de SSH.",
+            "Interdire la connexion directe en tant qu'administrateur root : modifier la ligne 'PermitRootLogin yes' en 'PermitRootLogin no' dans /etc/ssh/sshd_config.",
+            "Préférer les clés SSH aux mots de passe : activer 'PubkeyAuthentication yes' et 'PasswordAuthentication no'.",
+            "Bloquer l'accès SSH aux seules adresses IP de confiance via le pare-feu.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système",
+    },
+    23: {
+        "titre":       "Telnet — Administration à distance sans chiffrement (protocole obsolète)",
+        "probleme":    "Telnet est un outil d'administration des années 1970 qui ne chiffre absolument rien.",
+        "danger":      "Chaque mot de passe tapé circule en clair et peut être intercepté par n'importe qui sur le réseau.",
+        "etapes": [
+            "Désactiver immédiatement le service Telnet (Panneau de configuration → Fonctionnalités Windows → décocher Telnet, ou via systemctl disable telnet sous Linux).",
+            "Utiliser SSH à la place pour toute administration à distance — c'est identique mais chiffré.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Prestataire informatique / Administrateur système",
+    },
+    512: {
+        "titre":       "Rexec / Rlogin / RSH — Services d'accès à distance Unix obsolètes",
+        "probleme":    "Ces services permettent l'exécution de commandes à distance sans chiffrement.",
+        "danger":      "Aucun chiffrement, souvent pas d'authentification robuste — risque de prise de contrôle totale.",
+        "etapes": [
+            "Désactiver ces services immédiatement (rexec, rlogin, rsh sont considérés dangereux depuis 1990).",
+            "Utiliser SSH à la place.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Administrateur système",
+    },
+    # ── Partage de fichiers et réseau interne ──────────────────────────────────
+    445: {
+        "titre":       "SMB — Partage de fichiers Windows",
+        "probleme":    "Le partage de fichiers Windows est exposé sur le réseau.",
+        "danger":      "Des ransomwares (WannaCry, NotPetya) ont paralysé des milliers d'entreprises via ce service. Un accès non autorisé donne accès à tous vos fichiers partagés.",
+        "etapes": [
+            "Appliquer immédiatement toutes les mises à jour Windows (Démarrer → Paramètres → Windows Update → Rechercher des mises à jour).",
+            "Désactiver SMBv1 (version très vulnérable) : Panneau de configuration → Programmes → Activer ou désactiver des fonctionnalités Windows → décocher 'Prise en charge du partage de fichiers SMB 1.0/CIFS'.",
+            "Bloquer le port 445 sur le pare-feu pour les connexions venant d'internet.",
+            "Vérifier que seuls les utilisateurs autorisés ont accès aux partages réseau.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système",
+    },
+    139: {
+        "titre":       "NetBIOS — Partage réseau Windows (protocole ancien)",
+        "probleme":    "NetBIOS est l'ancien protocole de partage Windows, moins sécurisé que SMB.",
+        "danger":      "Expose le nom de vos machines, vos groupes de travail et peut faciliter des attaques de type 'man-in-the-middle'.",
+        "etapes": [
+            "Désactiver NetBIOS si vous n'en avez pas besoin : Connexions réseau → Propriétés de la carte → TCP/IP → Avancé → WINS → Désactiver NetBIOS.",
+            "Si nécessaire, bloquer les ports 137-139 sur le pare-feu.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système",
+    },
+    2049: {
+        "titre":       "NFS — Partage de fichiers réseau Linux",
+        "probleme":    "Le partage de fichiers NFS est exposé sur le réseau.",
+        "danger":      "Sans contrôle strict, n'importe quelle machine sur le réseau peut monter et lire vos fichiers.",
+        "etapes": [
+            "Vérifier les exports NFS (/etc/exports) et restreindre l'accès aux seules machines autorisées.",
+            "Activer l'authentification Kerberos si disponible.",
+            "Bloquer NFS au pare-feu si seule une communication interne est nécessaire.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur système",
+    },
+    # ── Services web ───────────────────────────────────────────────────────────
+    80: {
+        "titre":       "HTTP — Site web sans chiffrement",
+        "probleme":    "Votre service web fonctionne sans chiffrement (HTTP au lieu de HTTPS).",
+        "danger":      "Les données échangées — y compris les mots de passe et informations personnelles — sont lisibles par tous sur le réseau.",
+        "etapes": [
+            "Installer un certificat SSL/TLS sur votre serveur web — les certificats Let's Encrypt sont gratuits et largement supportés.",
+            "Activer HTTPS (port 443) et configurer une redirection automatique de HTTP vers HTTPS.",
+            "Mettre à jour votre serveur web (Apache, Nginx ou IIS) vers la dernière version stable.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Développeur web / Prestataire informatique",
+    },
+    443: {
+        "titre":       "HTTPS — Vérification de la configuration SSL/TLS",
+        "probleme":    "Le service HTTPS présente une version ou configuration SSL/TLS potentiellement vulnérable.",
+        "danger":      "Une mauvaise configuration peut permettre le déchiffrement des communications.",
+        "etapes": [
+            "Mettre à jour le serveur web et les bibliothèques SSL/TLS.",
+            "Désactiver les anciens protocoles obsolètes : SSL 3.0, TLS 1.0 et TLS 1.1.",
+            "Tester votre configuration gratuitement sur ssllabs.com (SSL Server Test) et viser la note A ou A+.",
+            "Renouveler le certificat si sa date d'expiration approche.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système / Développeur web",
+    },
+    8080: {
+        "titre":       "Application web sur port alternatif",
+        "probleme":    "Une application web est exposée sur un port alternatif, souvent sans chiffrement.",
+        "danger":      "Ces interfaces sont souvent des outils d'administration ou des API — leur exposition représente un risque élevé.",
+        "etapes": [
+            "Vérifier à quoi correspond ce service et s'il doit être accessible depuis le réseau.",
+            "Si c'est un outil d'administration, le restreindre aux seules adresses IP autorisées.",
+            "Activer HTTPS si ce n'est pas encore fait.",
+            "Protéger l'accès par un mot de passe fort ou une authentification à deux facteurs.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Développeur / Prestataire informatique",
+    },
+    # ── Bases de données ───────────────────────────────────────────────────────
+    3306: {
+        "titre":       "MySQL / MariaDB — Base de données exposée sur le réseau",
+        "probleme":    "Le serveur de base de données est directement accessible depuis le réseau.",
+        "danger":      "Une base de données exposée peut être vidée, modifiée ou chiffrée par un ransomware. Toutes vos données sont à risque.",
+        "etapes": [
+            "Configurer MySQL pour n'écouter que sur la machine locale : ajouter 'bind-address = 127.0.0.1' dans /etc/mysql/my.cnf, puis redémarrer MySQL.",
+            "Si l'accès depuis une autre machine est indispensable, utiliser un tunnel SSH plutôt qu'exposer le port directement.",
+            "Vérifier qu'aucun compte n'a un mot de passe vide : lancer 'SELECT User,Host,authentication_string FROM mysql.user;' dans MySQL.",
+            "Mettre à jour MySQL/MariaDB vers la dernière version stable.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Développeur / Prestataire informatique",
+    },
+    5432: {
+        "titre":       "PostgreSQL — Base de données exposée sur le réseau",
+        "probleme":    "La base de données PostgreSQL est accessible depuis le réseau.",
+        "danger":      "Un accès non autorisé peut exposer ou détruire l'intégralité de vos données.",
+        "etapes": [
+            "Configurer PostgreSQL pour n'écouter que localement : définir 'listen_addresses = localhost' dans postgresql.conf.",
+            "Revoir le fichier pg_hba.conf pour n'autoriser que les connexions nécessaires.",
+            "Mettre à jour PostgreSQL vers la dernière version stable.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur base de données",
+    },
+    1433: {
+        "titre":       "Microsoft SQL Server — Base de données exposée",
+        "probleme":    "SQL Server est accessible depuis le réseau.",
+        "danger":      "Un accès non autorisé peut conduire à la lecture, modification ou destruction de toutes vos données métier.",
+        "etapes": [
+            "Désactiver ou changer le mot de passe du compte 'sa' (administrateur SQL) s'il est actif.",
+            "Bloquer le port 1433 sur le pare-feu pour les connexions extérieures non nécessaires.",
+            "Appliquer les correctifs Microsoft SQL Server via Windows Update.",
+            "Auditer les comptes SQL Server et supprimer ceux qui sont inutilisés.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur base de données",
+    },
+    1521: {
+        "titre":       "Oracle Database — Base de données exposée",
+        "probleme":    "Le serveur Oracle Database est accessible depuis le réseau.",
+        "danger":      "Un accès non autorisé peut exposer l'intégralité de vos données.",
+        "etapes": [
+            "Restreindre l'accès au port 1521 via le pare-feu.",
+            "Changer les mots de passe par défaut des comptes Oracle (SYS, SYSTEM).",
+            "Appliquer le dernier Oracle Critical Patch Update (CPU).",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur base de données",
+    },
+    6379: {
+        "titre":       "Redis — Base de données en mémoire sans authentification",
+        "probleme":    "Redis est exposé sur le réseau, souvent sans aucune authentification par défaut.",
+        "danger":      "Redis sans protection peut être vidé, utilisé pour exécuter des commandes ou même compromettre le serveur entier.",
+        "etapes": [
+            "Ajouter un mot de passe dans /etc/redis/redis.conf : décommenter et définir 'requirepass VotreMotDePasseFort'.",
+            "Configurer Redis pour n'écouter que sur localhost : définir 'bind 127.0.0.1' dans redis.conf.",
+            "Redémarrer Redis après ces modifications.",
+            "Mettre à jour Redis vers la dernière version stable.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Développeur / Administrateur système",
+    },
+    27017: {
+        "titre":       "MongoDB — Base de données sans authentification",
+        "probleme":    "MongoDB est installé sans authentification activée, ce qui est le comportement par défaut.",
+        "danger":      "Des milliers de bases MongoDB ont été entièrement vidées par des attaquants automatisés. Vos données sont lisibles par tout le monde.",
+        "etapes": [
+            "Activer l'authentification dans /etc/mongod.conf : ajouter 'security: authorization: enabled'.",
+            "Créer un utilisateur administrateur MongoDB avec un mot de passe fort.",
+            "Configurer MongoDB pour n'écouter que sur localhost : définir 'net: bindIp: 127.0.0.1'.",
+            "Mettre à jour MongoDB vers la dernière version stable.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Développeur / Administrateur base de données",
+    },
+    9200: {
+        "titre":       "Elasticsearch — Moteur de recherche exposé sans authentification",
+        "probleme":    "Elasticsearch est accessible sur le réseau, souvent sans authentification dans les anciennes versions.",
+        "danger":      "Des données potentiellement sensibles indexées dans Elasticsearch peuvent être lues ou effacées par n'importe qui.",
+        "etapes": [
+            "Mettre à jour vers Elasticsearch 8.x qui active la sécurité par défaut.",
+            "Activer le module de sécurité X-Pack : ajouter 'xpack.security.enabled: true' dans elasticsearch.yml.",
+            "Configurer Elasticsearch pour n'écouter que sur localhost si l'accès externe n'est pas nécessaire.",
+            "Placer Elasticsearch derrière un proxy avec authentification si un accès externe est requis.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur système / Développeur",
+    },
+    11211: {
+        "titre":       "Memcached — Cache applicatif exposé sans authentification",
+        "probleme":    "Memcached est exposé sur le réseau sans authentification.",
+        "danger":      "Peut être utilisé pour amplifier des attaques DDoS (facteur x50 000) et expose des données applicatives en cache.",
+        "etapes": [
+            "Configurer Memcached pour n'écouter que sur localhost : ajouter '-l 127.0.0.1' dans la configuration.",
+            "Bloquer le port 11211 sur le pare-feu.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Administrateur système",
+    },
+    # ── Accès à distance graphique ─────────────────────────────────────────────
+    3389: {
+        "titre":       "Bureau à distance Windows (RDP) — Exposition directe sur le réseau",
+        "probleme":    "Le bureau à distance Windows est accessible directement depuis votre réseau.",
+        "danger":      "RDP est la cible principale des ransomwares. Des milliers de tentatives d'intrusion automatisées ciblent ce service chaque jour. Une seule connexion réussie donne le contrôle total de la machine.",
+        "etapes": [
+            "Si RDP n'est pas indispensable : le désactiver (Paramètres → Système → Bureau à distance → Désactiver).",
+            "Si RDP est nécessaire : l'utiliser UNIQUEMENT via un VPN — ne jamais l'exposer directement à internet.",
+            "Activer l'authentification au niveau réseau (NLA) : Propriétés système → Accès à distance → cocher 'Autoriser uniquement les connexions avec NLA'.",
+            "Appliquer toutes les mises à jour Windows immédiatement.",
+            "Utiliser un mot de passe fort pour tous les comptes Windows (minimum 12 caractères, majuscules + chiffres + symboles).",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système / Prestataire informatique",
+    },
+    5900: {
+        "titre":       "VNC — Contrôle à distance d'écran exposé",
+        "probleme":    "VNC permet de prendre le contrôle visuel d'un ordinateur à distance et est exposé sur le réseau.",
+        "danger":      "Sans protection forte, un attaquant peut voir et contrôler entièrement votre écran.",
+        "etapes": [
+            "Définir un mot de passe VNC fort si ce n'est pas déjà fait (minimum 8 caractères).",
+            "Désactiver VNC si non utilisé régulièrement.",
+            "Si VNC est nécessaire, l'utiliser uniquement via un tunnel SSH chiffré — ne jamais exposer le port 5900 directement.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système",
+    },
+    # ── Infrastructure réseau ──────────────────────────────────────────────────
+    53: {
+        "titre":       "DNS — Serveur de résolution de noms exposé",
+        "probleme":    "Un serveur DNS tourne sur cette machine et est accessible depuis le réseau.",
+        "danger":      "Un DNS mal configuré peut permettre des transferts de zone (révélant toute votre infrastructure) ou être utilisé pour des attaques d'amplification DDoS.",
+        "etapes": [
+            "Désactiver le service DNS si cette machine n'est pas censée être un serveur DNS.",
+            "Si c'est un serveur DNS légitime, désactiver les transferts de zone vers des hôtes non autorisés.",
+            "Restreindre les requêtes récursives aux seules machines internes.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur réseau / Prestataire informatique",
+    },
+    161: {
+        "titre":       "SNMP — Protocole de supervision réseau mal configuré",
+        "probleme":    "SNMP expose des informations détaillées sur vos équipements réseau.",
+        "danger":      "La communauté 'public' par défaut donne accès en lecture à la configuration de vos équipements. SNMPv1 et v2 ne chiffrent rien.",
+        "etapes": [
+            "Changer impérativement les noms de communauté par défaut ('public', 'private') par des chaînes aléatoires.",
+            "Passer à SNMPv3 qui intègre chiffrement et authentification.",
+            "Restreindre l'accès SNMP aux seules adresses IP de supervision.",
+            "Désactiver SNMP complètement si vous ne faites pas de supervision réseau.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur réseau",
+    },
+    # ── Messagerie ─────────────────────────────────────────────────────────────
+    25: {
+        "titre":       "SMTP — Serveur de messagerie exposé",
+        "probleme":    "Un serveur de messagerie est accessible sur le réseau.",
+        "danger":      "Un serveur mail mal configuré peut être détourné pour envoyer du spam en votre nom (open relay) ou révéler des informations sur votre infrastructure.",
+        "etapes": [
+            "Vérifier que le serveur n'est pas un 'open relay' : tester via mxtoolbox.com → SuperTool → 'Test Email Server'.",
+            "Activer l'authentification SMTP pour tous les envois.",
+            "Mettre à jour le logiciel de messagerie.",
+            "Restreindre le port 25 aux seuls flux légitimes via le pare-feu.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur système",
+    },
+    # ── Infrastructure critique ────────────────────────────────────────────────
+    2375: {
+        "titre":       "API Docker exposée sans chiffrement — CRITIQUE",
+        "probleme":    "L'API de gestion des conteneurs Docker est accessible sans authentification.",
+        "danger":      "Accès complet à Docker = accès root à toute la machine. Un attaquant peut lancer des conteneurs, lire des fichiers système et prendre le contrôle total du serveur.",
+        "etapes": [
+            "Désactiver immédiatement l'API Docker non chiffrée : supprimer '-H tcp://0.0.0.0:2375' des options Docker.",
+            "Si l'accès à distance à Docker est nécessaire, utiliser le port 2376 avec TLS mutualisé.",
+            "Redémarrer le service Docker après modification.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système / DevOps",
+    },
+    1099: {
+        "titre":       "Java RMI — Services Java à distance exposés",
+        "probleme":    "Des services Java accessibles à distance sont exposés sur le réseau.",
+        "danger":      "Java RMI est souvent associé à des vulnérabilités de désérialisation permettant l'exécution de code à distance.",
+        "etapes": [
+            "Désactiver RMI si non indispensable.",
+            "Restreindre l'accès au pare-feu.",
+            "Mettre à jour le JDK/JRE vers la dernière version.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Développeur Java / Administrateur système",
+    },
+    # ── Fallback par nom de service ────────────────────────────────────────────
+    "ftp":        {"titre": "FTP", "probleme": "Transfert de fichiers sans chiffrement.", "danger": "Identifiants lisibles sur le réseau.", "etapes": ["Désactiver FTP et utiliser SFTP à la place."], "complexite": "Facile", "responsable": "Prestataire informatique"},
+    "telnet":     {"titre": "Telnet", "probleme": "Administration sans chiffrement.", "danger": "Mots de passe lisibles en clair.", "etapes": ["Désactiver Telnet et utiliser SSH à la place."], "complexite": "Facile", "responsable": "Administrateur système"},
+    "smb":        {"titre": "SMB", "probleme": "Partage de fichiers Windows exposé.", "danger": "Risque de ransomware et d'accès non autorisé aux fichiers.", "etapes": ["Appliquer les mises à jour Windows.", "Désactiver SMBv1.", "Auditer les partages."], "complexite": "Moyen", "responsable": "Administrateur système"},
+    "rdp":        {"titre": "RDP", "probleme": "Bureau à distance exposé.", "danger": "Cible principale des ransomwares.", "etapes": ["Utiliser uniquement via VPN.", "Activer NLA.", "Mettre à jour Windows."], "complexite": "Moyen", "responsable": "Administrateur système"},
+    "vnc":        {"titre": "VNC", "probleme": "Contrôle à distance d'écran exposé.", "danger": "Accès visuel et contrôle complet de la machine.", "etapes": ["Définir un mot de passe fort.", "Accès uniquement via tunnel SSH."], "complexite": "Moyen", "responsable": "Administrateur système"},
+    "mysql":      {"titre": "MySQL", "probleme": "Base de données exposée.", "danger": "Toutes vos données sont accessibles.", "etapes": ["Restreindre MySQL à localhost.", "Changer les mots de passe.", "Mettre à jour."], "complexite": "Moyen", "responsable": "Développeur"},
+    "redis":      {"titre": "Redis", "probleme": "Cache Redis sans authentification.", "danger": "Données exposées, risque de compromission serveur.", "etapes": ["Activer requirepass.", "Bind sur localhost.", "Mettre à jour."], "complexite": "Facile", "responsable": "Développeur"},
+    "mongodb":    {"titre": "MongoDB", "probleme": "Base de données sans authentification.", "danger": "Données lisibles par tout le monde.", "etapes": ["Activer l'authentification.", "Bind sur localhost.", "Mettre à jour."], "complexite": "Moyen", "responsable": "Développeur"},
+    "snmp":       {"titre": "SNMP", "probleme": "Protocole de supervision exposé.", "danger": "Révèle la configuration réseau.", "etapes": ["Changer les communautés.", "Passer à SNMPv3.", "Restreindre l'accès."], "complexite": "Moyen", "responsable": "Administrateur réseau"},
+    "docker":     {"titre": "Docker API", "probleme": "API Docker exposée.", "danger": "Accès root au serveur.", "etapes": ["Désactiver l'API non chiffrée.", "Utiliser TLS sur le port 2376."], "complexite": "Moyen", "responsable": "DevOps"},
+    "ms-wbt-server": {"titre": "Bureau à distance Windows (RDP)", "probleme": "RDP exposé.", "danger": "Cible principale des ransomwares.", "etapes": ["Accès uniquement via VPN.", "Activer NLA.", "Mettre à jour Windows."], "complexite": "Moyen", "responsable": "Administrateur système"},
+}
+
+def _build_remediation_guide(hosts: list) -> list:
+    """
+    Construit le guide de remédiation adapté aux vulnérabilités trouvées.
+
+    Pour chaque port ouvert critique/élevé (dédupliqué par port), cherche les
+    instructions dans REMEDIATION_GUIDE (port → nom de service → fallback générique).
+    Retourne une liste ordonnée par sévérité puis port.
+    """
+    _sev_order = {"critical": 0, "high": 1, "medium": 2}
+    seen: set = set()
+    items: list = []
+
+    for host in hosts:
+        if host.get("unreachable"):
+            continue
+        for v in host.get("vulnerabilities", []):
+            if v["state"] != "open":
+                continue
+            sev = v["severity_class"]
+            if sev not in _sev_order:
+                continue
+
+            port = v["port"]
+            service_key = (v.get("service") or "").lower().split()[0].strip()
+            dedup_key = port  # un seul bloc par port (même si plusieurs hôtes)
+
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
+            # Lookup : port numérique d'abord, nom de service ensuite
+            rem = REMEDIATION_GUIDE.get(port) or REMEDIATION_GUIDE.get(service_key)
+            if rem is None:
+                continue  # pas de fiche connue pour ce port/service
+
+            complexity = rem.get("complexite", "Moyen")
+
+            items.append({
+                "port":          port,
+                "protocol":      v.get("protocol", "TCP"),
+                "service":       v.get("service", f"Port {port}"),
+                "severity_class": sev,
+                "severity_text": v["severity_text"],
+                "titre":         rem["titre"],
+                "probleme":      rem["probleme"],
+                "danger":        rem["danger"],
+                "etapes":        rem["etapes"],
+                "complexite":    complexity,
+                "responsable":   rem.get("responsable", "Administrateur système"),
+                "urgency_label": _URGENCY_LABELS.get(sev, ("À planifier", "#64748b"))[0],
+            })
+
+    items.sort(key=lambda x: (_sev_order.get(x["severity_class"], 3), x["port"]))
+    return items[:18]  # max 18 fiches pour garder le rapport lisible
 
 
 def _plain_service(port: int, pinfo: dict) -> str:
@@ -410,7 +801,6 @@ def _build_recommendation(
     product: str,
     version: str,
     cve_list: list,
-    confidence: str,
 ) -> str:
     """
     Génère une recommandation contextuelle en langage accessible.
@@ -562,7 +952,7 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
 
             conf_label, conf_source = CONFIDENCE_LABELS.get(confidence, ("?", "?"))
             recommendation = _build_recommendation(
-                sev_class, product, version, cve_data["cve_list"], confidence
+                sev_class, product, version, cve_data["cve_list"]
             )
             svc_label = _plain_service(port, pinfo)
             urgency_label, urgency_color = _URGENCY_LABELS.get(sev_class, ("À planifier", "#64748b"))
@@ -777,7 +1167,7 @@ def _generate_network_map_image(topology: list) -> str:
             fontsize=7.5, fontweight="bold", color="white", zorder=6)
 
     # ── Sous-réseaux et hôtes ───────────────────────────────────────────────────
-    for _i, (net, sx, sw) in enumerate(zip(topology, sub_xs, sub_widths, strict=False)):
+    for net, sx, sw in zip(topology, sub_xs, sub_widths, strict=False):
         net_risk_col = RISK_COL.get(net["risk"], "#64748b")
 
         # Ligne LAN → sous-réseau
@@ -992,8 +1382,9 @@ def build_report_data(
         if _h.get("unreachable"):
             unreachable_count += 1
 
-    action_plan = _build_action_plan(hosts)
-    summary_text = _plain_summary(global_risk, n_hosts, n_critical, n_vulns, risk_dist)
+    action_plan       = _build_action_plan(hosts)
+    remediation_guide = _build_remediation_guide(hosts)
+    summary_text      = _plain_summary(global_risk, n_hosts, n_critical, n_vulns, risk_dist)
 
     # Collecte le résultat matplotlib (prêt ou presque prêt à ce stade)
     try:
@@ -1085,6 +1476,7 @@ def build_report_data(
         "duration":               "",
         "hosts":                  hosts,
         "action_plan":            action_plan,
+        "remediation_guide":      remediation_guide,
         "plain_summary":          summary_text,
         "top_open_ports":         top_open_ports,
         "total_cves":             total_cves,
@@ -1114,17 +1506,21 @@ def generate_report(
         cache:          Cache exploit partagé (optionnel)
         discovered_ips: Toutes les IPs découvertes (ARP + nmap ping)
     """
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
     if output_path is None:
-        output_path = f"rapports/Rapport_Audit_{ts}.pdf"
+        output_dir = os.environ.get("RECONENGINE_OUTPUT_DIR", "rapports")
+        output_path = f"{output_dir}/Rapport_Audit_{ts}.pdf"
 
     out = pathlib.Path(output_path).resolve()
-    # Bloquer les path traversal : le PDF doit rester dans le répertoire de travail courant
-    try:
-        out.relative_to(pathlib.Path.cwd())
-    except ValueError:
+    # Bloquer les path traversal : le PDF doit rester dans le répertoire de sortie configuré.
+    # On ancre sur RECONENGINE_OUTPUT_DIR (ou "rapports" par défaut) plutôt que sur cwd()
+    # pour rester correct quelle que soit la working directory au moment de l'appel.
+    output_root = pathlib.Path(
+        os.environ.get("RECONENGINE_OUTPUT_DIR", "rapports")
+    ).resolve()
+    if not str(out).startswith(str(output_root) + os.sep):
         raise ValueError(
-            f"Chemin de sortie non autorisé (hors du répertoire courant) : {out}"
+            f"Chemin de sortie non autorisé (doit être dans {output_root}) : {out}"
         )
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1139,12 +1535,26 @@ def generate_report(
     if scan_profile:
         data["scan_profile"] = scan_profile
 
-    env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+    env = Environment(
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
+        autoescape=select_autoescape(["html"]),
+    )
     template = env.get_template("report.html")
     html_content = template.render(data)
 
+    def _local_url_fetcher(url: str) -> dict:
+        # Block any resource not under the templates directory — prevents
+        # WeasyPrint from following injected file:// or http:// URIs that
+        # could originate from unescaped nmap banner data.
+        resolved = pathlib.Path(url.removeprefix("file://")).resolve() if url.startswith("file://") else None
+        if resolved is None or not str(resolved).startswith(str(TEMPLATES_DIR)):
+            raise URLFetchingError(f"Ressource externe bloquée : {url}")
+        return default_url_fetcher(url)
+
     log.info("Rendu PDF en cours...")
-    HTML(string=html_content, base_url=str(TEMPLATES_DIR)).write_pdf(str(out))
+    HTML(string=html_content, base_url=str(TEMPLATES_DIR)).write_pdf(
+        str(out), url_fetcher=_local_url_fetcher
+    )
     os.chmod(out, 0o600)
     log.info("Rapport généré : %s", out)
     return str(out)

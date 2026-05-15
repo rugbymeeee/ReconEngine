@@ -19,6 +19,11 @@ pycparser==3.0.0
 brotli==1.2.0
 zopfli==0.4.0
 
+# HTTP API
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.7
+
 # Interface terminal
 rich~=13.7
 

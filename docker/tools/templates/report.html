@@ -687,6 +687,137 @@ h3 {
   margin-top: 3px;
 }
 
+/* ── Guide de remédiation ─────────────────────────────────────────────────── */
+/* Complexité */
+.cplx-facile { background:#f0fdf4; border:1px solid #86efac; }
+.cplx-facile .cplx-val { color:#059669; }
+.cplx-moyen  { background:#fffbeb; border:1px solid #fde68a; }
+.cplx-moyen  .cplx-val { color:#d97706; }
+.cplx-expert { background:#fff1f2; border:1px solid #fca5a5; }
+.cplx-expert .cplx-val { color:#dc2626; }
+/* Urgence */
+.urg-critical { background:#dc2626; }
+.urg-high     { background:#ea580c; }
+.urg-medium   { background:#d97706; }
+.urg-low      { background:#059669; }
+
+.rem-section { margin-bottom: 24px; }
+.rem-card {
+  border: 1px solid var(--ink-200);
+  border-radius: 8px;
+  margin-bottom: 14px;
+  overflow: hidden;
+  page-break-inside: avoid;
+}
+.rem-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--ink-200);
+}
+.rem-port-badge {
+  font-size: 9pt;
+  font-weight: 900;
+  font-family: monospace;
+  background: var(--brand-900);
+  color: #fff;
+  border-radius: 4px;
+  padding: 3px 8px;
+  flex-shrink: 0;
+}
+.rem-title {
+  font-size: 10pt;
+  font-weight: 700;
+  color: var(--brand-900);
+  flex: 1;
+}
+.rem-urgency {
+  font-size: 7.5pt;
+  font-weight: 700;
+  border-radius: 3px;
+  padding: 2px 8px;
+  color: #fff;
+  flex-shrink: 0;
+}
+.rem-card-body {
+  padding: 12px 14px;
+  display: flex;
+  gap: 16px;
+}
+.rem-left { flex: 1; }
+.rem-right {
+  min-width: 120px;
+  max-width: 140px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rem-label {
+  font-size: 7.5pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ink-400);
+  margin-bottom: 3px;
+}
+.rem-text {
+  font-size: 8.5pt;
+  color: var(--ink-900);
+  line-height: 1.55;
+  margin-bottom: 8px;
+}
+.rem-danger {
+  font-size: 8.5pt;
+  color: #92400e;
+  background: #fffbeb;
+  border-left: 3px solid #fde68a;
+  padding: 6px 10px;
+  border-radius: 0 4px 4px 0;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.rem-steps {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+.rem-steps li {
+  font-size: 8.5pt;
+  color: var(--ink-900);
+  line-height: 1.55;
+  padding: 4px 0 4px 22px;
+  position: relative;
+  border-bottom: 1px solid #f1f5f9;
+}
+.rem-steps li:last-child { border-bottom: none; }
+.rem-steps li::before {
+  content: attr(data-n);
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 16px;
+  height: 16px;
+  background: var(--brand-500);
+  color: #fff;
+  border-radius: 50%;
+  font-size: 7pt;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 16px;
+}
+.rem-meta-box {
+  border-radius: 5px;
+  padding: 7px 10px;
+  font-size: 8pt;
+}
+.rem-meta-label { font-weight: 700; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
+
 /* ── Tableaux ─────────────────────────────────────────────────────────────── */
 table {
   width: 100%;
@@ -1190,17 +1321,22 @@ tr.row-medium   td { background: #fffdf0 !important; }
     </li>
     <li>
       <span class="toc-num">4.</span>
-      <span class="toc-label">Vue d'ensemble du réseau</span>
+      <span class="toc-label">Guide de remédiation — Comment corriger les failles</span>
       <span class="toc-dots"></span>
     </li>
     <li>
       <span class="toc-num">5.</span>
+      <span class="toc-label">Vue d'ensemble du réseau</span>
+      <span class="toc-dots"></span>
+    </li>
+    <li>
+      <span class="toc-num">6.</span>
       <span class="toc-label">Cartographie du réseau</span>
       <span class="toc-dots"></span>
     </li>
     {% for host in hosts %}
     <li class="toc-sub">
-      <span class="toc-num">5.{{ loop.index }}</span>
+      <span class="toc-num">6.{{ loop.index }}</span>
       <span class="toc-label">
         Machine {{ host.ip }}{% if host.host_type == 'server' %} — Serveur{% elif host.host_type == 'workstation' %} — Poste de travail{% endif %}
         <span class="badge {% if host.risk == 'CRITIQUE' %}critical{% elif host.risk == 'ELEVE' %}high{% elif host.risk == 'MODERE' %}medium{% else %}low{% endif %}" style="font-size:6pt;padding:1px 5px">{{ host.risk }}</span>
@@ -1209,17 +1345,17 @@ tr.row-medium   td { background: #fffdf0 !important; }
     </li>
     {% endfor %}
     <li>
-      <span class="toc-num">6.</span>
+      <span class="toc-num">7.</span>
       <span class="toc-label">Prochaines étapes — Ce que vous devez faire</span>
       <span class="toc-dots"></span>
     </li>
     <li>
-      <span class="toc-num">7.</span>
+      <span class="toc-num">8.</span>
       <span class="toc-label">Comment cet audit a été réalisé</span>
       <span class="toc-dots"></span>
     </li>
     <li>
-      <span class="toc-num">8.</span>
+      <span class="toc-num">9.</span>
       <span class="toc-label">Glossaire</span>
       <span class="toc-dots"></span>
     </li>
@@ -1413,8 +1549,71 @@ tr.row-medium   td { background: #fffdf0 !important; }
 </table>
 {% endif %}
 
+<!-- ── Guide de remédiation ───────────────────────────────────────────────── -->
+{% if remediation_guide %}
+<h2 class="page-break">Guide de remédiation — Comment corriger les failles</h2>
+<p style="font-size:9pt;color:var(--ink-600);margin-bottom:16px">
+  Pour chaque problème identifié, voici des instructions concrètes adaptées à votre situation.
+  Ces fiches sont classées par priorité. Vous pouvez les transmettre directement à votre prestataire informatique.
+</p>
+
+<div class="rem-section">
+{% for r in remediation_guide %}
+<div class="rem-card">
+
+  <!-- En-tête de la fiche -->
+  <div class="rem-card-header">
+    <span class="rem-port-badge">{{ r.protocol }} {{ r.port }}</span>
+    <span class="rem-title">{{ r.titre }}</span>
+    <span class="badge {{ r.severity_class }}" style="font-size:7.5pt">{{ r.severity_text }}</span>
+    <span class="rem-urgency urg-{{ r.severity_class }}">⏱ {{ r.urgency_label }}</span>
+  </div>
+
+  <!-- Corps de la fiche -->
+  <div class="rem-card-body">
+
+    <!-- Colonne gauche : explication + étapes -->
+    <div class="rem-left">
+      <div class="rem-label">Le problème</div>
+      <div class="rem-text">{{ r.probleme }}</div>
+
+      <div class="rem-danger">⚠ <strong>Pourquoi c'est dangereux :</strong> {{ r.danger }}</div>
+
+      <div class="rem-label">Comment corriger</div>
+      <ol class="rem-steps">
+        {% for step in r.etapes %}
+        <li data-n="{{ loop.index }}">{{ step }}</li>
+        {% endfor %}
+      </ol>
+    </div>
+
+    <!-- Colonne droite : complexité + responsable -->
+    <div class="rem-right">
+      {% set cplx_cls = 'cplx-facile' if r.complexite == 'Facile' else ('cplx-expert' if r.complexite == 'Expert' else 'cplx-moyen') %}
+      <div class="rem-meta-box {{ cplx_cls }}">
+        <div class="rem-meta-label">Complexité</div>
+        <div class="cplx-val" style="font-size:9pt;font-weight:700">{{ r.complexite }}</div>
+      </div>
+      <div class="rem-meta-box" style="background:#f8fafc;border:1px solid var(--ink-200)">
+        <div class="rem-meta-label">Qui s'en charge</div>
+        <div style="font-size:8pt;color:var(--ink-900);line-height:1.4">{{ r.responsable }}</div>
+      </div>
+      {% if r.severity_class == 'critical' %}
+      <div class="rem-meta-box" style="background:#fff1f2;border:1px solid #fca5a5">
+        <div class="rem-meta-label" style="color:#dc2626">Priorité absolue</div>
+        <div style="font-size:8pt;color:#dc2626;font-weight:600">Agir aujourd'hui</div>
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+</div>
+{% endfor %}
+</div>
+{% endif %}
+
 <!-- ── Statistiques globales ──────────────────────────────────────────────── -->
-<h2>Vue d'ensemble du réseau</h2>
+<h2 class="page-break">Vue d'ensemble du réseau</h2>
 <p style="font-size:9pt;color:var(--ink-600);margin-bottom:10px">
   Récapitulatif de ce qui a été analysé et découvert sur votre réseau.
 </p>

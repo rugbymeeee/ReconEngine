@@ -47,17 +47,19 @@ import discover  # noqa: E402
 import rapport  # noqa: E402
 import scan  # noqa: E402
 import status as led_status  # noqa: E402
+from config import _validate_ports  # noqa: E402
 
 cfg_mod.setup_logging()
 log = logging.getLogger(__name__)
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
-_API_KEY = os.environ.get("RECONENGINE_API_KEY", "changeme")
-if _API_KEY == "changeme":
-    log.warning(
-        "RECONENGINE_API_KEY is set to the default 'changeme'. "
-        "Set a strong key before exposing this API on a public interface."
+_API_KEY = os.environ.get("RECONENGINE_API_KEY", "")
+if not _API_KEY or _API_KEY == "changeme":
+    log.error(
+        "RECONENGINE_API_KEY must be set to a strong secret before starting. "
+        "The default 'changeme' key is rejected. Set it via environment variable or .env file."
     )
+    sys.exit(1)
 
 # Brute-force protection : compteur d'échecs par IP sur une fenêtre glissante.
 _auth_failures: dict[str, list[float]] = {}
@@ -99,18 +101,21 @@ AuthDep = Annotated[None, Depends(_require_api_key)]
 async def _lifespan(application: FastAPI):  # noqa: ARG001
     """Initialize DB on startup; mark orphaned running scans as error."""
     _db_init()
-    with _db_connect() as conn:
-        orphans = conn.execute(
-            "SELECT scan_id FROM scans WHERE status = ?", (ScanStatus.RUNNING,)
-        ).fetchall()
-    for row in orphans:
-        _db_update(
-            row["scan_id"],
-            status=ScanStatus.ERROR,
-            finished_at=datetime.datetime.now().isoformat(),
-            error="Process restarted while scan was running",
-        )
-        log.warning("Marked orphaned scan %s as error", row["scan_id"])
+    try:
+        with _db_connect() as conn:
+            orphans = conn.execute(
+                "SELECT scan_id FROM scans WHERE status = ?", (ScanStatus.RUNNING,)
+            ).fetchall()
+        for row in orphans:
+            _db_update(
+                row["scan_id"],
+                status=ScanStatus.ERROR,
+                finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
+                error="Process restarted while scan was running",
+            )
+            log.warning("Marked orphaned scan %s as error", row["scan_id"])
+    except Exception as exc:
+        log.error("Failed to mark orphaned scans: %s", exc)
     # API en attente — LEDs en idle
     led_status.set_state(led_status.State.IDLE)
     try:
@@ -186,9 +191,18 @@ def _db_insert(entry: dict[str, Any]) -> None:
         conn.commit()
 
 
+_SCAN_COLUMNS = frozenset({
+    "status", "finished_at", "duration", "hosts_found",
+    "hosts_scanned", "report_file", "error",
+})
+
+
 def _db_update(scan_id: str, **kwargs: Any) -> None:
     if not kwargs:
         return
+    unknown = set(kwargs) - _SCAN_COLUMNS
+    if unknown:
+        raise ValueError(f"_db_update: unknown column(s): {unknown}")
     cols = ", ".join(f"{k} = ?" for k in kwargs)
     vals = list(kwargs.values()) + [scan_id]
     with _db_lock, _db_connect() as conn:
@@ -243,6 +257,16 @@ class ScanRequest(BaseModel):
         default=False,
         description="Skip PDF generation (faster, terminal results only).",
     )
+
+    @field_validator("ports")
+    @classmethod
+    def _check_ports(cls, v: str | None) -> str | None:
+        if v is not None:
+            try:
+                _validate_ports(v)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+        return v
 
     @field_validator("profile")
     @classmethod
@@ -324,7 +348,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             led_status.set_state(led_status.State.DONE_OK)
             _persist(
                 status=ScanStatus.DONE,
-                finished_at=datetime.datetime.now().isoformat(),
+                finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
                 duration="0s",
             )
             with _running_lock:
@@ -366,7 +390,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
             led_status.set_state(led_status.State.REPORTING)
             import main as main_mod
             n_ports = main_mod._port_count(cfg.scan.ports)
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
             output_path = f"{cfg.output_dir}/Rapport_Audit_{ts}.pdf"
             try:
                 out = rapport.generate_report(
@@ -407,7 +431,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
 
         _persist(
             status=ScanStatus.DONE,
-            finished_at=datetime.datetime.now().isoformat(),
+            finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
             duration=duration,
             hosts_scanned=len(scan_results),
             report_file=report_file,
@@ -419,7 +443,7 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
         led_status.set_state(led_status.State.ERROR)
         _persist(
             status=ScanStatus.ERROR,
-            finished_at=datetime.datetime.now().isoformat(),
+            finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
             error=str(exc),
         )
 
@@ -482,8 +506,8 @@ def start_scan(
                 detail=f"A scan is already running (id={running_id}). Wait for it to finish.",
             )
 
-    scan_id = str(uuid.uuid4())[:8]
-    now = datetime.datetime.now().isoformat()
+    scan_id = str(uuid.uuid4())
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     entry: dict[str, Any] = {
         "scan_id":       scan_id,
         "status":        ScanStatus.PENDING,
@@ -510,7 +534,7 @@ def start_scan(
     summary="Get scan status and results",
     response_model=ScanSummary,
 )
-def get_scan(_auth: AuthDep, scan_id: str) -> ScanSummary:
+def get_scan(scan_id: str, _auth: AuthDep) -> ScanSummary:
     # Prefer live in-memory state for running scans (has up-to-date hosts_scanned)
     with _running_lock:
         live = _running.get(scan_id)
@@ -556,7 +580,7 @@ def list_reports(_auth: AuthDep) -> list[ReportEntry]:
         ReportEntry(
             filename=p.name,
             size_kb=round(p.stat().st_size / 1024, 1),
-            created=datetime.datetime.fromtimestamp(p.stat().st_mtime).isoformat(),
+            created=datetime.datetime.fromtimestamp(p.stat().st_mtime, tz=datetime.UTC).isoformat(),
         )
         for p in pdfs
     ]

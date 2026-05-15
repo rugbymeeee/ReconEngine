@@ -102,7 +102,7 @@ def test_start_scan_returns_scan_id(client):
     assert resp.status_code == 202
     data = resp.json()
     assert "scan_id" in data
-    assert len(data["scan_id"]) == 8
+    assert len(data["scan_id"]) == 36  # full UUID e.g. "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
     assert data["status"] == "pending"
     assert data["profile"] == "quick"
 

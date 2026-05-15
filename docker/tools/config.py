@@ -103,7 +103,6 @@ SCAN_PROFILES: dict[str, dict] = {
 # Clé de profil de fallback utilisée par scan.py si un profil lent ne renvoie aucun résultat.
 # Désactivable via RECONENGINE_FALLBACK_DISABLED=1 (utile sur matériel lent / WiFi instable).
 FALLBACK_PROFILE = "quick"
-FALLBACK_SCAN_ENABLED: bool = os.environ.get("RECONENGINE_FALLBACK_DISABLED", "0") != "1"
 
 # ── Validation helpers ─────────────────────────────────────────────────────────
 _PORT_SPEC_RE = re.compile(r"^(\d+(-\d+)?)(,\d+(-\d+)?)*$")

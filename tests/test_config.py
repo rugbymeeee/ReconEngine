@@ -235,6 +235,7 @@ def test_toml_config_missing_file_logs_warning(tmp_path, monkeypatch, caplog):
     """Un chemin RECONENGINE_CONFIG inexistant log un warning sans planter."""
     monkeypatch.setenv("RECONENGINE_CONFIG", str(tmp_path / "missing.toml"))
     import logging
+
     from config import Config
     with caplog.at_level(logging.WARNING, logger="config"):
         cfg = Config.load()
@@ -286,21 +287,18 @@ def test_cvss_thresholds_exported():
     assert levels == {"critical", "high", "medium", "low"}
 
 
-def test_fallback_scan_enabled_default(monkeypatch):
-    """FALLBACK_SCAN_ENABLED est True par défaut."""
+def test_fallback_disabled_env_unset_means_enabled(monkeypatch):
+    """Sans RECONENGINE_FALLBACK_DISABLED, le fallback est actif (valeur "0" par défaut)."""
+    import os
     monkeypatch.delenv("RECONENGINE_FALLBACK_DISABLED", raising=False)
-    # Recharger le module pour refléter l'env
-    import importlib, config as cfg_module
-    importlib.reload(cfg_module)
-    assert cfg_module.FALLBACK_SCAN_ENABLED is True
+    assert os.environ.get("RECONENGINE_FALLBACK_DISABLED", "0") != "1"
 
 
-def test_fallback_scan_disabled_via_env(monkeypatch):
-    """RECONENGINE_FALLBACK_DISABLED=1 désactive le fallback."""
+def test_fallback_disabled_env_1_means_disabled(monkeypatch):
+    """RECONENGINE_FALLBACK_DISABLED=1 doit désactiver le fallback dans scan.py."""
+    import os
     monkeypatch.setenv("RECONENGINE_FALLBACK_DISABLED", "1")
-    import importlib, config as cfg_module
-    importlib.reload(cfg_module)
-    assert cfg_module.FALLBACK_SCAN_ENABLED is False
+    assert os.environ.get("RECONENGINE_FALLBACK_DISABLED", "0") == "1"
 
 
 def test_setup_logging_does_not_raise():

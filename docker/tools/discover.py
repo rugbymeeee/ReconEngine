@@ -76,12 +76,12 @@ def _interface_networks() -> tuple[dict, set]:
     return networks, local_ips
 
 
-def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5) -> dict:
+def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 1) -> dict:
     """
     ARP broadcast sur le réseau. Retourne {ip: {"ip": str, "mac": str}}.
 
-    Une seule passe avec inter=0 (rafale de paquets) : plus rapide que plusieurs
-    passes séquentielles avec timeout complet chacune.
+    `retry` passes avec inter=0 (rafale de paquets) pour améliorer la détection
+    sur les réseaux WiFi où des réponses ARP peuvent être perdues.
     """
     if not _is_root():
         log.warning("[ARP] Ignoré — droits root requis.")
@@ -94,17 +94,19 @@ def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5) -> dict:
         timeout = max(timeout, 15)   # /17–/20
 
     hosts: dict = {}
-    try:
-        # inter=0 : pas de délai entre les paquets ARP → rafale maximale
-        ans, _ = arping(str(network), timeout=timeout, verbose=False, inter=0)
-        for _, rcv in ans:
-            ip = rcv.psrc
-            if ip not in hosts:
-                hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
-    except PermissionError:
-        log.error("[ARP] Permission refusée (nécessite root).")
-    except Exception as e:
-        log.warning("[ARP] Erreur : %s", e)
+    for _ in range(max(1, retry)):
+        try:
+            ans, _ = arping(str(network), timeout=timeout, verbose=False, inter=0)
+            for _, rcv in ans:
+                ip = rcv.psrc
+                if ip not in hosts:
+                    hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
+        except PermissionError:
+            log.error("[ARP] Permission refusée (nécessite root).")
+            break  # unrecoverable — root required
+        except Exception as e:
+            log.warning("[ARP] Erreur : %s", e)
+            # transient error — continue remaining retries
     return hosts
 
 

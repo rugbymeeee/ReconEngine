@@ -13,7 +13,7 @@ import shutil
 import time
 
 import nmap
-from config import FALLBACK_PROFILE, FALLBACK_SCAN_ENABLED, SCAN_PROFILES
+from config import FALLBACK_PROFILE, SCAN_PROFILES
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ def scan_host(
     # Utile pour les profils lents (full, stealth, udp) où l'hôte peut être présent
     # mais timeout sur les scripts ou les sockets UDP.
     # Désactivable via RECONENGINE_FALLBACK_DISABLED=1.
-    if FALLBACK_SCAN_ENABLED and profile != FALLBACK_PROFILE and not arguments:
+    if os.environ.get("RECONENGINE_FALLBACK_DISABLED", "0") != "1" and profile != FALLBACK_PROFILE and not arguments:
         log.warning(
             "Scan '%s' sans résultat pour %s — retry profil '%s' (ports ouverts seulement)",
             profile, ip, FALLBACK_PROFILE,
