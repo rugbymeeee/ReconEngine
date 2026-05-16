@@ -15,11 +15,12 @@ import pathlib
 from concurrent.futures import ThreadPoolExecutor
 from ipaddress import AddressValueError, ip_address
 
-from jinja2 import Environment, FileSystemLoader
-from weasyprint import HTML
-
+import cve as cve_mod
 import exploits as exploit_mod
 import scan as scan_mod
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from weasyprint import HTML
+from weasyprint.urls import URLFetchingError, default_url_fetcher
 
 log = logging.getLogger(__name__)
 
@@ -69,56 +70,550 @@ _SERVER_INDICATOR_PORTS = {
     3306, 5432, 6379, 8080, 8443, 9200, 27017,
 }
 
-# ── Recommandations par niveau ─────────────────────────────────────────────────
+# ── Recommandations par niveau (langage accessible) ───────────────────────────
 RECOMMENDATIONS = {
     "critical": (
-        "Désactiver ou isoler immédiatement le service. "
-        "Appliquer les correctifs CVE disponibles. "
-        "Analyser les journaux pour toute trace de compromission."
+        "Ce service doit être désactivé ou coupé du réseau immédiatement. "
+        "Contactez votre responsable informatique aujourd'hui et vérifiez "
+        "si des accès suspects ont eu lieu récemment."
     ),
     "high": (
-        "Restreindre l'accès via liste d'autorisation pare-feu. "
-        "Mettre à jour vers la dernière version stable. "
-        "Activer l'authentification forte si possible."
+        "Ce service doit être mis à jour et son accès limité aux seules personnes autorisées. "
+        "Faites appel à votre informaticien pour effectuer les mises à jour et "
+        "bloquer les connexions non nécessaires."
     ),
     "medium": (
-        "Audit de configuration recommandé. "
-        "Surveiller les tentatives d'accès anormales. "
-        "Désactiver si le service est non essentiel."
+        "Ce service mérite une vérification de configuration. "
+        "S'il n'est pas indispensable, désactivez-le. "
+        "Planifiez une revue avec votre équipe informatique dans les deux prochaines semaines."
     ),
-    "low": "Surveillance passive recommandée. Aucune action immédiate requise.",
+    "low": (
+        "Ce point ne nécessite pas d'action immédiate. "
+        "Intégrez-le à votre prochaine maintenance informatique."
+    ),
 }
 
+# Libellés de confiance (affichés dans le rapport)
+CONFIDENCE_LABELS = {
+    "confirmed":  ("Confirmée",  "NVD"),       # CVSS NVD avec version réelle
+    "probable":   ("Probable",   "nmap"),       # scripts nmap / NVD sans version exacte
+    "potential":  ("Potentielle", "searchsploit"),  # matching textuel approximatif
+    "heuristic":  ("Heuristique", "port"),      # classification par port/service uniquement
+}
 
 ACTION_PLAN_MAX_ITEMS = 25
 
-# ── Textes client (non-technique) ─────────────────────────────────────────────
+# ── Noms lisibles des services courants (par port) ────────────────────────────
+_SERVICE_PLAIN_NAMES: dict[int, str] = {
+    20:    "Transfert de fichiers FTP (données)",
+    21:    "Transfert de fichiers non chiffré (FTP)",
+    22:    "Administration à distance sécurisée (SSH)",
+    23:    "Administration à distance non chiffrée (Telnet)",
+    25:    "Serveur de messagerie sortante (SMTP)",
+    53:    "Résolution de noms de domaine (DNS)",
+    67:    "Attribution d'adresses réseau (DHCP)",
+    69:    "Transfert de fichiers simplifié (TFTP)",
+    80:    "Site web non chiffré (HTTP)",
+    110:   "Réception de messagerie (POP3)",
+    111:   "Services réseau à distance (RPC)",
+    135:   "Services Windows à distance (RPC/DCOM)",
+    137:   "Partage réseau Windows (NetBIOS)",
+    139:   "Partage réseau Windows",
+    143:   "Réception de messagerie (IMAP)",
+    389:   "Annuaire d'entreprise (LDAP)",
+    443:   "Site web chiffré (HTTPS)",
+    445:   "Partage de fichiers et imprimantes Windows (SMB)",
+    512:   "Exécution de commandes à distance (rexec)",
+    513:   "Session à distance non chiffrée (rlogin)",
+    514:   "Shell à distance non chiffré (RSH)",
+    587:   "Envoi de messagerie (SMTP soumission)",
+    873:   "Synchronisation de fichiers (rsync)",
+    993:   "Réception de messagerie chiffrée (IMAP)",
+    995:   "Réception de messagerie chiffrée (POP3)",
+    1099:  "Services Java à distance (RMI)",
+    1433:  "Base de données SQL Server (Microsoft)",
+    1521:  "Base de données Oracle",
+    2049:  "Partage de fichiers réseau (NFS)",
+    2375:  "Gestion de conteneurs Docker (non chiffré)",
+    2376:  "Gestion de conteneurs Docker",
+    3306:  "Base de données MySQL / MariaDB",
+    3389:  "Bureau à distance Windows (RDP)",
+    5432:  "Base de données PostgreSQL",
+    5900:  "Contrôle d'écran à distance (VNC)",
+    5901:  "Contrôle d'écran à distance (VNC)",
+    6379:  "Base de données en mémoire (Redis)",
+    8080:  "Application web (port alternatif)",
+    8443:  "Application web chiffrée (port alternatif)",
+    9200:  "Moteur de recherche de données (Elasticsearch)",
+    11211: "Cache mémoire applicatif (Memcached)",
+    27017: "Base de données MongoDB",
+}
+
+# ── Impact métier par niveau de risque ────────────────────────────────────────
+_BUSINESS_IMPACTS = {
+    "critical": (
+        "Un attaquant pourrait prendre le contrôle total de cette machine : "
+        "voler toutes les données, bloquer vos activités ou vous demander une rançon."
+    ),
+    "high": (
+        "Un accès non autorisé à des informations confidentielles est possible, "
+        "ou le fonctionnement du service peut être perturbé."
+    ),
+    "medium": (
+        "Ce point facilite la collecte d'informations sur votre réseau "
+        "et peut ouvrir la voie à d'autres tentatives d'intrusion."
+    ),
+    "low": (
+        "Risque limité dans les conditions actuelles. "
+        "À surveiller lors des prochaines maintenances."
+    ),
+}
+
+# ── Libellés d'urgence ─────────────────────────────────────────────────────────
+_URGENCY_LABELS = {
+    "critical": ("Aujourd'hui",        "#dc2626"),
+    "high":     ("Sous 48 heures",     "#ea580c"),
+    "medium":   ("Sous 2 semaines",    "#d97706"),
+    "low":      ("Prochaine révision", "#059669"),
+}
+
+# ── Textes de synthèse non-technique ──────────────────────────────────────────
 _PLAIN_INTROS = {
     "CRITIQUE": (
-        "L'audit révèle une situation préoccupante : des failles critiques ont été identifiées "
-        "sur votre réseau. Ces vulnérabilités pourraient permettre à une personne malveillante "
-        "d'accéder à vos systèmes, de voler des données sensibles ou de perturber vos activités."
+        "L'audit a révélé des problèmes graves sur votre réseau. "
+        "Des portes d'entrée exploitables par des personnes malveillantes ont été trouvées : "
+        "elles pourraient leur permettre de voler vos données, de prendre le contrôle de vos machines "
+        "ou de bloquer complètement vos activités. Une intervention est nécessaire dès aujourd'hui."
     ),
     "ELEVE": (
-        "L'audit révèle des failles importantes sur votre réseau. "
-        "Plusieurs points nécessitent une attention rapide pour éviter tout incident de sécurité."
+        "L'audit a révélé des failles sérieuses qui exposent votre organisation à un risque réel. "
+        "Ces points ne sont pas encore une urgence absolue, mais des personnes malveillantes "
+        "pourraient en tirer profit rapidement si rien n'est fait. "
+        "Nous recommandons d'agir dans les 48 heures."
     ),
     "MODERE": (
-        "Votre réseau présente un niveau de sécurité convenable, mais quelques points méritent "
-        "attention. Les problèmes identifiés ne sont pas urgents mais doivent être traités "
-        "dans un délai raisonnable."
+        "Votre réseau est globalement bien protégé, mais quelques points méritent attention. "
+        "Les problèmes identifiés n'exposent pas vos données à un danger immédiat, "
+        "mais ils pourraient faciliter une attaque si d'autres failles venaient s'y ajouter. "
+        "Une correction planifiée dans les deux prochaines semaines est recommandée."
     ),
     "FAIBLE": (
         "Votre réseau présente un bon niveau de sécurité. "
-        "L'audit n'a identifié que des risques mineurs pouvant être traités progressivement."
+        "L'audit n'a détecté que des points mineurs, sans risque immédiat pour vos données "
+        "ou vos activités. Ces éléments peuvent être traités lors de votre prochaine maintenance."
     ),
 }
 
 _ACTION_LABELS = {
-    "critical": "Désactiver ou isoler immédiatement ce service. Risque d'intrusion immédiat.",
-    "high":     "Restreindre l'accès réseau à ce service et appliquer les mises à jour disponibles.",
-    "medium":   "Vérifier la configuration du service et désactiver s'il n'est pas indispensable.",
+    "critical": "Désactiver ou couper du réseau immédiatement. Contacter votre informaticien aujourd'hui.",
+    "high":     "Mettre à jour et limiter l'accès à ce service. À faire dans les 48 heures.",
+    "medium":   "Vérifier la configuration et désactiver si le service est inutile. À planifier.",
 }
+
+# ── Guide de remédiation ───────────────────────────────────────────────────────
+# Base de connaissances : instructions concrètes par port / service.
+# Clés : int (port) en priorité, str (nom de service nmap) en fallback.
+REMEDIATION_GUIDE: dict = {
+    # ── Protocoles d'administration non chiffrés ───────────────────────────────
+    21: {
+        "titre":       "FTP — Transfert de fichiers sans chiffrement",
+        "probleme":    "Ce service transmet les mots de passe et les fichiers en clair sur le réseau.",
+        "danger":      "N'importe qui connecté au même réseau peut lire vos identifiants et vos fichiers sans effort.",
+        "etapes": [
+            "Désactiver le service FTP sur le serveur (Panneau de configuration → Outils d'administration → Services → arrêter 'FTP').",
+            "Le remplacer par SFTP ou FTPS si des transferts de fichiers sont nécessaires — votre hébergeur ou prestataire peut configurer cela.",
+            "Si FTP doit rester actif temporairement, le restreindre à certaines adresses IP uniquement via le pare-feu.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Prestataire informatique / Administrateur système",
+    },
+    22: {
+        "titre":       "SSH — Accès à distance (vérifier la configuration)",
+        "probleme":    "L'accès à distance SSH est exposé sur le réseau avec une version potentiellement ancienne.",
+        "danger":      "Une configuration par défaut ou une version obsolète peut permettre à un attaquant de se connecter à distance.",
+        "etapes": [
+            "Mettre à jour le système d'exploitation pour obtenir la dernière version de SSH.",
+            "Interdire la connexion directe en tant qu'administrateur root : modifier la ligne 'PermitRootLogin yes' en 'PermitRootLogin no' dans /etc/ssh/sshd_config.",
+            "Préférer les clés SSH aux mots de passe : activer 'PubkeyAuthentication yes' et 'PasswordAuthentication no'.",
+            "Bloquer l'accès SSH aux seules adresses IP de confiance via le pare-feu.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système",
+    },
+    23: {
+        "titre":       "Telnet — Administration à distance sans chiffrement (protocole obsolète)",
+        "probleme":    "Telnet est un outil d'administration des années 1970 qui ne chiffre absolument rien.",
+        "danger":      "Chaque mot de passe tapé circule en clair et peut être intercepté par n'importe qui sur le réseau.",
+        "etapes": [
+            "Désactiver immédiatement le service Telnet (Panneau de configuration → Fonctionnalités Windows → décocher Telnet, ou via systemctl disable telnet sous Linux).",
+            "Utiliser SSH à la place pour toute administration à distance — c'est identique mais chiffré.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Prestataire informatique / Administrateur système",
+    },
+    512: {
+        "titre":       "Rexec / Rlogin / RSH — Services d'accès à distance Unix obsolètes",
+        "probleme":    "Ces services permettent l'exécution de commandes à distance sans chiffrement.",
+        "danger":      "Aucun chiffrement, souvent pas d'authentification robuste — risque de prise de contrôle totale.",
+        "etapes": [
+            "Désactiver ces services immédiatement (rexec, rlogin, rsh sont considérés dangereux depuis 1990).",
+            "Utiliser SSH à la place.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Administrateur système",
+    },
+    # ── Partage de fichiers et réseau interne ──────────────────────────────────
+    445: {
+        "titre":       "SMB — Partage de fichiers Windows",
+        "probleme":    "Le partage de fichiers Windows est exposé sur le réseau.",
+        "danger":      "Des ransomwares (WannaCry, NotPetya) ont paralysé des milliers d'entreprises via ce service. Un accès non autorisé donne accès à tous vos fichiers partagés.",
+        "etapes": [
+            "Appliquer immédiatement toutes les mises à jour Windows (Démarrer → Paramètres → Windows Update → Rechercher des mises à jour).",
+            "Désactiver SMBv1 (version très vulnérable) : Panneau de configuration → Programmes → Activer ou désactiver des fonctionnalités Windows → décocher 'Prise en charge du partage de fichiers SMB 1.0/CIFS'.",
+            "Bloquer le port 445 sur le pare-feu pour les connexions venant d'internet.",
+            "Vérifier que seuls les utilisateurs autorisés ont accès aux partages réseau.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système",
+    },
+    139: {
+        "titre":       "NetBIOS — Partage réseau Windows (protocole ancien)",
+        "probleme":    "NetBIOS est l'ancien protocole de partage Windows, moins sécurisé que SMB.",
+        "danger":      "Expose le nom de vos machines, vos groupes de travail et peut faciliter des attaques de type 'man-in-the-middle'.",
+        "etapes": [
+            "Désactiver NetBIOS si vous n'en avez pas besoin : Connexions réseau → Propriétés de la carte → TCP/IP → Avancé → WINS → Désactiver NetBIOS.",
+            "Si nécessaire, bloquer les ports 137-139 sur le pare-feu.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système",
+    },
+    2049: {
+        "titre":       "NFS — Partage de fichiers réseau Linux",
+        "probleme":    "Le partage de fichiers NFS est exposé sur le réseau.",
+        "danger":      "Sans contrôle strict, n'importe quelle machine sur le réseau peut monter et lire vos fichiers.",
+        "etapes": [
+            "Vérifier les exports NFS (/etc/exports) et restreindre l'accès aux seules machines autorisées.",
+            "Activer l'authentification Kerberos si disponible.",
+            "Bloquer NFS au pare-feu si seule une communication interne est nécessaire.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur système",
+    },
+    # ── Services web ───────────────────────────────────────────────────────────
+    80: {
+        "titre":       "HTTP — Site web sans chiffrement",
+        "probleme":    "Votre service web fonctionne sans chiffrement (HTTP au lieu de HTTPS).",
+        "danger":      "Les données échangées — y compris les mots de passe et informations personnelles — sont lisibles par tous sur le réseau.",
+        "etapes": [
+            "Installer un certificat SSL/TLS sur votre serveur web — les certificats Let's Encrypt sont gratuits et largement supportés.",
+            "Activer HTTPS (port 443) et configurer une redirection automatique de HTTP vers HTTPS.",
+            "Mettre à jour votre serveur web (Apache, Nginx ou IIS) vers la dernière version stable.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Développeur web / Prestataire informatique",
+    },
+    443: {
+        "titre":       "HTTPS — Vérification de la configuration SSL/TLS",
+        "probleme":    "Le service HTTPS présente une version ou configuration SSL/TLS potentiellement vulnérable.",
+        "danger":      "Une mauvaise configuration peut permettre le déchiffrement des communications.",
+        "etapes": [
+            "Mettre à jour le serveur web et les bibliothèques SSL/TLS.",
+            "Désactiver les anciens protocoles obsolètes : SSL 3.0, TLS 1.0 et TLS 1.1.",
+            "Tester votre configuration gratuitement sur ssllabs.com (SSL Server Test) et viser la note A ou A+.",
+            "Renouveler le certificat si sa date d'expiration approche.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système / Développeur web",
+    },
+    8080: {
+        "titre":       "Application web sur port alternatif",
+        "probleme":    "Une application web est exposée sur un port alternatif, souvent sans chiffrement.",
+        "danger":      "Ces interfaces sont souvent des outils d'administration ou des API — leur exposition représente un risque élevé.",
+        "etapes": [
+            "Vérifier à quoi correspond ce service et s'il doit être accessible depuis le réseau.",
+            "Si c'est un outil d'administration, le restreindre aux seules adresses IP autorisées.",
+            "Activer HTTPS si ce n'est pas encore fait.",
+            "Protéger l'accès par un mot de passe fort ou une authentification à deux facteurs.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Développeur / Prestataire informatique",
+    },
+    # ── Bases de données ───────────────────────────────────────────────────────
+    3306: {
+        "titre":       "MySQL / MariaDB — Base de données exposée sur le réseau",
+        "probleme":    "Le serveur de base de données est directement accessible depuis le réseau.",
+        "danger":      "Une base de données exposée peut être vidée, modifiée ou chiffrée par un ransomware. Toutes vos données sont à risque.",
+        "etapes": [
+            "Configurer MySQL pour n'écouter que sur la machine locale : ajouter 'bind-address = 127.0.0.1' dans /etc/mysql/my.cnf, puis redémarrer MySQL.",
+            "Si l'accès depuis une autre machine est indispensable, utiliser un tunnel SSH plutôt qu'exposer le port directement.",
+            "Vérifier qu'aucun compte n'a un mot de passe vide : lancer 'SELECT User,Host,authentication_string FROM mysql.user;' dans MySQL.",
+            "Mettre à jour MySQL/MariaDB vers la dernière version stable.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Développeur / Prestataire informatique",
+    },
+    5432: {
+        "titre":       "PostgreSQL — Base de données exposée sur le réseau",
+        "probleme":    "La base de données PostgreSQL est accessible depuis le réseau.",
+        "danger":      "Un accès non autorisé peut exposer ou détruire l'intégralité de vos données.",
+        "etapes": [
+            "Configurer PostgreSQL pour n'écouter que localement : définir 'listen_addresses = localhost' dans postgresql.conf.",
+            "Revoir le fichier pg_hba.conf pour n'autoriser que les connexions nécessaires.",
+            "Mettre à jour PostgreSQL vers la dernière version stable.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur base de données",
+    },
+    1433: {
+        "titre":       "Microsoft SQL Server — Base de données exposée",
+        "probleme":    "SQL Server est accessible depuis le réseau.",
+        "danger":      "Un accès non autorisé peut conduire à la lecture, modification ou destruction de toutes vos données métier.",
+        "etapes": [
+            "Désactiver ou changer le mot de passe du compte 'sa' (administrateur SQL) s'il est actif.",
+            "Bloquer le port 1433 sur le pare-feu pour les connexions extérieures non nécessaires.",
+            "Appliquer les correctifs Microsoft SQL Server via Windows Update.",
+            "Auditer les comptes SQL Server et supprimer ceux qui sont inutilisés.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur base de données",
+    },
+    1521: {
+        "titre":       "Oracle Database — Base de données exposée",
+        "probleme":    "Le serveur Oracle Database est accessible depuis le réseau.",
+        "danger":      "Un accès non autorisé peut exposer l'intégralité de vos données.",
+        "etapes": [
+            "Restreindre l'accès au port 1521 via le pare-feu.",
+            "Changer les mots de passe par défaut des comptes Oracle (SYS, SYSTEM).",
+            "Appliquer le dernier Oracle Critical Patch Update (CPU).",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur base de données",
+    },
+    6379: {
+        "titre":       "Redis — Base de données en mémoire sans authentification",
+        "probleme":    "Redis est exposé sur le réseau, souvent sans aucune authentification par défaut.",
+        "danger":      "Redis sans protection peut être vidé, utilisé pour exécuter des commandes ou même compromettre le serveur entier.",
+        "etapes": [
+            "Ajouter un mot de passe dans /etc/redis/redis.conf : décommenter et définir 'requirepass VotreMotDePasseFort'.",
+            "Configurer Redis pour n'écouter que sur localhost : définir 'bind 127.0.0.1' dans redis.conf.",
+            "Redémarrer Redis après ces modifications.",
+            "Mettre à jour Redis vers la dernière version stable.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Développeur / Administrateur système",
+    },
+    27017: {
+        "titre":       "MongoDB — Base de données sans authentification",
+        "probleme":    "MongoDB est installé sans authentification activée, ce qui est le comportement par défaut.",
+        "danger":      "Des milliers de bases MongoDB ont été entièrement vidées par des attaquants automatisés. Vos données sont lisibles par tout le monde.",
+        "etapes": [
+            "Activer l'authentification dans /etc/mongod.conf : ajouter 'security: authorization: enabled'.",
+            "Créer un utilisateur administrateur MongoDB avec un mot de passe fort.",
+            "Configurer MongoDB pour n'écouter que sur localhost : définir 'net: bindIp: 127.0.0.1'.",
+            "Mettre à jour MongoDB vers la dernière version stable.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Développeur / Administrateur base de données",
+    },
+    9200: {
+        "titre":       "Elasticsearch — Moteur de recherche exposé sans authentification",
+        "probleme":    "Elasticsearch est accessible sur le réseau, souvent sans authentification dans les anciennes versions.",
+        "danger":      "Des données potentiellement sensibles indexées dans Elasticsearch peuvent être lues ou effacées par n'importe qui.",
+        "etapes": [
+            "Mettre à jour vers Elasticsearch 8.x qui active la sécurité par défaut.",
+            "Activer le module de sécurité X-Pack : ajouter 'xpack.security.enabled: true' dans elasticsearch.yml.",
+            "Configurer Elasticsearch pour n'écouter que sur localhost si l'accès externe n'est pas nécessaire.",
+            "Placer Elasticsearch derrière un proxy avec authentification si un accès externe est requis.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur système / Développeur",
+    },
+    11211: {
+        "titre":       "Memcached — Cache applicatif exposé sans authentification",
+        "probleme":    "Memcached est exposé sur le réseau sans authentification.",
+        "danger":      "Peut être utilisé pour amplifier des attaques DDoS (facteur x50 000) et expose des données applicatives en cache.",
+        "etapes": [
+            "Configurer Memcached pour n'écouter que sur localhost : ajouter '-l 127.0.0.1' dans la configuration.",
+            "Bloquer le port 11211 sur le pare-feu.",
+        ],
+        "complexite":  "Facile",
+        "responsable": "Administrateur système",
+    },
+    # ── Accès à distance graphique ─────────────────────────────────────────────
+    3389: {
+        "titre":       "Bureau à distance Windows (RDP) — Exposition directe sur le réseau",
+        "probleme":    "Le bureau à distance Windows est accessible directement depuis votre réseau.",
+        "danger":      "RDP est la cible principale des ransomwares. Des milliers de tentatives d'intrusion automatisées ciblent ce service chaque jour. Une seule connexion réussie donne le contrôle total de la machine.",
+        "etapes": [
+            "Si RDP n'est pas indispensable : le désactiver (Paramètres → Système → Bureau à distance → Désactiver).",
+            "Si RDP est nécessaire : l'utiliser UNIQUEMENT via un VPN — ne jamais l'exposer directement à internet.",
+            "Activer l'authentification au niveau réseau (NLA) : Propriétés système → Accès à distance → cocher 'Autoriser uniquement les connexions avec NLA'.",
+            "Appliquer toutes les mises à jour Windows immédiatement.",
+            "Utiliser un mot de passe fort pour tous les comptes Windows (minimum 12 caractères, majuscules + chiffres + symboles).",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système / Prestataire informatique",
+    },
+    5900: {
+        "titre":       "VNC — Contrôle à distance d'écran exposé",
+        "probleme":    "VNC permet de prendre le contrôle visuel d'un ordinateur à distance et est exposé sur le réseau.",
+        "danger":      "Sans protection forte, un attaquant peut voir et contrôler entièrement votre écran.",
+        "etapes": [
+            "Définir un mot de passe VNC fort si ce n'est pas déjà fait (minimum 8 caractères).",
+            "Désactiver VNC si non utilisé régulièrement.",
+            "Si VNC est nécessaire, l'utiliser uniquement via un tunnel SSH chiffré — ne jamais exposer le port 5900 directement.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système",
+    },
+    # ── Infrastructure réseau ──────────────────────────────────────────────────
+    53: {
+        "titre":       "DNS — Serveur de résolution de noms exposé",
+        "probleme":    "Un serveur DNS tourne sur cette machine et est accessible depuis le réseau.",
+        "danger":      "Un DNS mal configuré peut permettre des transferts de zone (révélant toute votre infrastructure) ou être utilisé pour des attaques d'amplification DDoS.",
+        "etapes": [
+            "Désactiver le service DNS si cette machine n'est pas censée être un serveur DNS.",
+            "Si c'est un serveur DNS légitime, désactiver les transferts de zone vers des hôtes non autorisés.",
+            "Restreindre les requêtes récursives aux seules machines internes.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur réseau / Prestataire informatique",
+    },
+    161: {
+        "titre":       "SNMP — Protocole de supervision réseau mal configuré",
+        "probleme":    "SNMP expose des informations détaillées sur vos équipements réseau.",
+        "danger":      "La communauté 'public' par défaut donne accès en lecture à la configuration de vos équipements. SNMPv1 et v2 ne chiffrent rien.",
+        "etapes": [
+            "Changer impérativement les noms de communauté par défaut ('public', 'private') par des chaînes aléatoires.",
+            "Passer à SNMPv3 qui intègre chiffrement et authentification.",
+            "Restreindre l'accès SNMP aux seules adresses IP de supervision.",
+            "Désactiver SNMP complètement si vous ne faites pas de supervision réseau.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur réseau",
+    },
+    # ── Messagerie ─────────────────────────────────────────────────────────────
+    25: {
+        "titre":       "SMTP — Serveur de messagerie exposé",
+        "probleme":    "Un serveur de messagerie est accessible sur le réseau.",
+        "danger":      "Un serveur mail mal configuré peut être détourné pour envoyer du spam en votre nom (open relay) ou révéler des informations sur votre infrastructure.",
+        "etapes": [
+            "Vérifier que le serveur n'est pas un 'open relay' : tester via mxtoolbox.com → SuperTool → 'Test Email Server'.",
+            "Activer l'authentification SMTP pour tous les envois.",
+            "Mettre à jour le logiciel de messagerie.",
+            "Restreindre le port 25 aux seuls flux légitimes via le pare-feu.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Administrateur système",
+    },
+    # ── Infrastructure critique ────────────────────────────────────────────────
+    2375: {
+        "titre":       "API Docker exposée sans chiffrement — CRITIQUE",
+        "probleme":    "L'API de gestion des conteneurs Docker est accessible sans authentification.",
+        "danger":      "Accès complet à Docker = accès root à toute la machine. Un attaquant peut lancer des conteneurs, lire des fichiers système et prendre le contrôle total du serveur.",
+        "etapes": [
+            "Désactiver immédiatement l'API Docker non chiffrée : supprimer '-H tcp://0.0.0.0:2375' des options Docker.",
+            "Si l'accès à distance à Docker est nécessaire, utiliser le port 2376 avec TLS mutualisé.",
+            "Redémarrer le service Docker après modification.",
+        ],
+        "complexite":  "Moyen",
+        "responsable": "Administrateur système / DevOps",
+    },
+    1099: {
+        "titre":       "Java RMI — Services Java à distance exposés",
+        "probleme":    "Des services Java accessibles à distance sont exposés sur le réseau.",
+        "danger":      "Java RMI est souvent associé à des vulnérabilités de désérialisation permettant l'exécution de code à distance.",
+        "etapes": [
+            "Désactiver RMI si non indispensable.",
+            "Restreindre l'accès au pare-feu.",
+            "Mettre à jour le JDK/JRE vers la dernière version.",
+        ],
+        "complexite":  "Expert",
+        "responsable": "Développeur Java / Administrateur système",
+    },
+    # ── Fallback par nom de service ────────────────────────────────────────────
+    "ftp":        {"titre": "FTP", "probleme": "Transfert de fichiers sans chiffrement.", "danger": "Identifiants lisibles sur le réseau.", "etapes": ["Désactiver FTP et utiliser SFTP à la place."], "complexite": "Facile", "responsable": "Prestataire informatique"},
+    "telnet":     {"titre": "Telnet", "probleme": "Administration sans chiffrement.", "danger": "Mots de passe lisibles en clair.", "etapes": ["Désactiver Telnet et utiliser SSH à la place."], "complexite": "Facile", "responsable": "Administrateur système"},
+    "smb":        {"titre": "SMB", "probleme": "Partage de fichiers Windows exposé.", "danger": "Risque de ransomware et d'accès non autorisé aux fichiers.", "etapes": ["Appliquer les mises à jour Windows.", "Désactiver SMBv1.", "Auditer les partages."], "complexite": "Moyen", "responsable": "Administrateur système"},
+    "rdp":        {"titre": "RDP", "probleme": "Bureau à distance exposé.", "danger": "Cible principale des ransomwares.", "etapes": ["Utiliser uniquement via VPN.", "Activer NLA.", "Mettre à jour Windows."], "complexite": "Moyen", "responsable": "Administrateur système"},
+    "vnc":        {"titre": "VNC", "probleme": "Contrôle à distance d'écran exposé.", "danger": "Accès visuel et contrôle complet de la machine.", "etapes": ["Définir un mot de passe fort.", "Accès uniquement via tunnel SSH."], "complexite": "Moyen", "responsable": "Administrateur système"},
+    "mysql":      {"titre": "MySQL", "probleme": "Base de données exposée.", "danger": "Toutes vos données sont accessibles.", "etapes": ["Restreindre MySQL à localhost.", "Changer les mots de passe.", "Mettre à jour."], "complexite": "Moyen", "responsable": "Développeur"},
+    "redis":      {"titre": "Redis", "probleme": "Cache Redis sans authentification.", "danger": "Données exposées, risque de compromission serveur.", "etapes": ["Activer requirepass.", "Bind sur localhost.", "Mettre à jour."], "complexite": "Facile", "responsable": "Développeur"},
+    "mongodb":    {"titre": "MongoDB", "probleme": "Base de données sans authentification.", "danger": "Données lisibles par tout le monde.", "etapes": ["Activer l'authentification.", "Bind sur localhost.", "Mettre à jour."], "complexite": "Moyen", "responsable": "Développeur"},
+    "snmp":       {"titre": "SNMP", "probleme": "Protocole de supervision exposé.", "danger": "Révèle la configuration réseau.", "etapes": ["Changer les communautés.", "Passer à SNMPv3.", "Restreindre l'accès."], "complexite": "Moyen", "responsable": "Administrateur réseau"},
+    "docker":     {"titre": "Docker API", "probleme": "API Docker exposée.", "danger": "Accès root au serveur.", "etapes": ["Désactiver l'API non chiffrée.", "Utiliser TLS sur le port 2376."], "complexite": "Moyen", "responsable": "DevOps"},
+    "ms-wbt-server": {"titre": "Bureau à distance Windows (RDP)", "probleme": "RDP exposé.", "danger": "Cible principale des ransomwares.", "etapes": ["Accès uniquement via VPN.", "Activer NLA.", "Mettre à jour Windows."], "complexite": "Moyen", "responsable": "Administrateur système"},
+}
+
+def _build_remediation_guide(hosts: list) -> list:
+    """
+    Construit le guide de remédiation adapté aux vulnérabilités trouvées.
+
+    Pour chaque port ouvert critique/élevé (dédupliqué par port), cherche les
+    instructions dans REMEDIATION_GUIDE (port → nom de service → fallback générique).
+    Retourne une liste ordonnée par sévérité puis port.
+    """
+    _sev_order = {"critical": 0, "high": 1, "medium": 2}
+    seen: set = set()
+    items: list = []
+
+    for host in hosts:
+        if host.get("unreachable"):
+            continue
+        for v in host.get("vulnerabilities", []):
+            if v["state"] != "open":
+                continue
+            sev = v["severity_class"]
+            if sev not in _sev_order:
+                continue
+
+            port = v["port"]
+            service_key = (v.get("service") or "").lower().split()[0].strip()
+            dedup_key = port  # un seul bloc par port (même si plusieurs hôtes)
+
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
+            # Lookup : port numérique d'abord, nom de service ensuite
+            rem = REMEDIATION_GUIDE.get(port) or REMEDIATION_GUIDE.get(service_key)
+            if rem is None:
+                continue  # pas de fiche connue pour ce port/service
+
+            complexity = rem.get("complexite", "Moyen")
+
+            items.append({
+                "port":          port,
+                "protocol":      v.get("protocol", "TCP"),
+                "service":       v.get("service", f"Port {port}"),
+                "severity_class": sev,
+                "severity_text": v["severity_text"],
+                "titre":         rem["titre"],
+                "probleme":      rem["probleme"],
+                "danger":        rem["danger"],
+                "etapes":        rem["etapes"],
+                "complexite":    complexity,
+                "responsable":   rem.get("responsable", "Administrateur système"),
+                "urgency_label": _URGENCY_LABELS.get(sev, ("À planifier", "#64748b"))[0],
+            })
+
+    items.sort(key=lambda x: (_sev_order.get(x["severity_class"], 3), x["port"]))
+    return items[:18]  # max 18 fiches pour garder le rapport lisible
+
+
+def _plain_service(port: int, pinfo: dict) -> str:
+    """
+    Retourne un nom de service lisible par un non-technicien.
+
+    Priorité : table de noms connus par port → produit nmap → nom de service → "Service inconnu".
+    """
+    if port in _SERVICE_PLAIN_NAMES:
+        return _SERVICE_PLAIN_NAMES[port]
+    product = (pinfo.get("product") or "").strip()
+    version = (pinfo.get("version") or "").strip()
+    name = (pinfo.get("name") or "").strip()
+    label = " ".join(filter(None, [product, version])) or name
+    return label or "Service inconnu"
 
 
 def _plain_summary(
@@ -130,14 +625,31 @@ def _plain_summary(
 ) -> str:
     """Génère un texte d'explication en français simple pour un lecteur non-technique."""
     intro = _PLAIN_INTROS.get(global_risk, _PLAIN_INTROS["FAIBLE"])
-    parts: list[str] = [f"{n_hosts} machine(s) ont été analysées sur ce réseau."]
-    if n_critical:
-        parts.append(
-            f"{n_critical} vulnérabilité(s) critique(s) nécessitent une intervention immédiate."
-        )
+    parts: list[str] = []
+
+    # Formulation naturelle du nombre de machines
+    if n_hosts == 1:
+        parts.append("1 machine a été analysée sur ce réseau.")
+    else:
+        parts.append(f"{n_hosts} machines ont été analysées sur ce réseau.")
+
+    # Critiques
+    if n_critical == 1:
+        parts.append("1 problème critique nécessite une intervention immédiate.")
+    elif n_critical > 1:
+        parts.append(f"{n_critical} problèmes critiques nécessitent une intervention immédiate.")
+
+    # Autres niveaux
+    n_high = risk_dist.get("ELEVE", 0)
+    if n_high == 1:
+        parts.append("1 machine présente un risque élevé.")
+    elif n_high > 1:
+        parts.append(f"{n_high} machines présentent un risque élevé.")
+
     other = n_vulns - n_critical
-    if other > 0:
-        parts.append(f"{other} autre(s) point(s) de sécurité ont également été répertoriés.")
+    if other > 0 and not n_high:
+        parts.append(f"{other} autre(s) point(s) de vigilance ont été relevés.")
+
     return f"{intro} {' '.join(parts)}"
 
 
@@ -154,14 +666,25 @@ def _build_action_plan(hosts: list) -> list:
             sev = v["severity_class"]
             if sev not in _sev_order:
                 continue
+            cve_refs = [
+                c["cve_id"] for c in v.get("cve_list", [])[:3]
+                if isinstance(c, dict) and c.get("cve_id")
+            ]
+            urgency_label, urgency_color = _URGENCY_LABELS.get(sev, ("À planifier", "#64748b"))
             actions.append({
-                "ip":             host["ip"],
-                "port":           v["port"],
-                "service":        v["service"] or f"Port {v['port']}",
-                "severity_class": sev,
-                "severity_text":  v["severity_text"],
-                "action":         _ACTION_LABELS[sev],
-                "has_exploits":   v["exploit_count"] > 0,
+                "ip":              host["ip"],
+                "port":            v["port"],
+                "service":         v["service"] or f"Port {v['port']}",
+                "service_label":   v.get("service_label") or v["service"] or f"Port {v['port']}",
+                "severity_class":  sev,
+                "severity_text":   v["severity_text"],
+                "action":          _ACTION_LABELS[sev],
+                "has_exploits":    v["exploit_count"] > 0,
+                "cve_refs":        cve_refs,
+                "max_cvss":        v.get("max_cvss", 0.0),
+                "business_impact": _BUSINESS_IMPACTS.get(sev, ""),
+                "urgency_label":   urgency_label,
+                "urgency_color":   urgency_color,
             })
     actions.sort(key=lambda a: (_sev_order[a["severity_class"]], a["ip"], a["port"]))
     for i, a in enumerate(actions, 1):
@@ -169,30 +692,146 @@ def _build_action_plan(hosts: list) -> list:
     return actions[:ACTION_PLAN_MAX_ITEMS]
 
 
+def _build_top_open_ports(hosts: list, top_n: int = 10) -> list:
+    """
+    Retourne les N ports ouverts les plus fréquents (tous hôtes confondus).
+
+    Chaque entrée : {"port": int, "service": str, "host_count": int, "severity": str}
+    La sévérité retenue est la plus haute observée pour ce port.
+    """
+    from collections import Counter
+
+    _sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    port_counter: Counter = Counter()
+    port_service: dict[int, str] = {}
+    port_severity: dict[int, str] = {}
+
+    for host in hosts:
+        if host.get("unreachable"):
+            continue
+        seen = set()
+        for v in host.get("vulnerabilities", []):
+            if v["state"] != "open":
+                continue
+            port = v["port"]
+            if port not in seen:
+                seen.add(port)
+                port_counter[port] += 1
+            if port not in port_service:
+                port_service[port] = v.get("service") or str(port)
+            # Retenir la sévérité la plus haute observée pour ce port
+            cur = port_severity.get(port, "low")
+            new = v.get("severity_class", "low")
+            if _sev_order.get(new, 3) < _sev_order.get(cur, 3):
+                port_severity[port] = new
+
+    return [
+        {
+            "port":       port,
+            "service":    port_service.get(port, str(port)),
+            "host_count": count,
+            "severity":   port_severity.get(port, "low"),
+        }
+        for port, count in port_counter.most_common(top_n)
+    ]
+
+
 # ── Fonctions internes ─────────────────────────────────────────────────────────
 
-def _classify(port: int, pinfo: dict, found_exploits: list) -> tuple[str, str]:
-    """Retourne (severity_class, severity_text) pour un port/service."""
+def _classify(
+    port: int,
+    pinfo: dict,
+    found_exploits: list,
+    cve_data: dict | None = None,
+) -> tuple[str, str, str]:
+    """
+    Retourne (severity_class, severity_text, confidence) pour un port/service.
+
+    confidence indique la fiabilité de la classification :
+      - "confirmed"  → CVSS réel depuis NVD avec version vérifiée
+      - "probable"   → CVSS issu de scripts nmap ou NVD sans version exacte
+      - "potential"  → uniquement searchsploit (matching textuel, non vérifié)
+      - "heuristic"  → heuristique port/service (aucune base CVE consultée)
+
+    Hiérarchie de sévérité :
+      1. Score CVSS réel (NVD / scripts nmap) — source la plus fiable
+      2. Exploit public searchsploit → high max (pas critical : matching approximatif)
+      3. Port critique ou service à risque élevé → high
+      4. Port < 1024 (service privilégié) → medium
+      5. Sinon → low
+    """
     name = (pinfo.get("name") or "").lower()
     state = pinfo.get("state", "")
 
-    if state == "filtered":
-        if found_exploits:
-            return "critical", "CRITIQUE"
-        if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
-            return "high", "ELEVE"
-        return "low", "FAIBLE"
+    if state not in ("open", "filtered"):
+        return "low", "FAIBLE", "heuristic"
 
-    if state != "open":
-        return "low", "FAIBLE"
+    # ── Priorité 1 : CVSS réel ───────────────────────────────────────────────
+    if cve_data and cve_data.get("max_cvss", 0.0) > 0.0:
+        source = cve_data.get("source", "nmap")
+        confidence = "confirmed" if source == "nvd" else "probable"
+        sev_class, sev_text = cve_data["severity_class"], cve_data["severity_text"]
+        # Un exploit public connu ne peut pas abaisser la sévérité sous "high"
+        if found_exploits and sev_class not in ("critical", "high"):
+            return "high", "ELEVE", confidence
+        return sev_class, sev_text, confidence
 
+    # ── Priorité 2 : exploit searchsploit (matching textuel, non vérifié) ────
+    # Ne pas classer "critical" sur la base de searchsploit seul : trop de faux
+    # positifs par matching approximatif. → "high" + confidence "potential".
     if found_exploits:
-        return "critical", "CRITIQUE"
+        return "high", "ELEVE", "potential"
+
+    # ── Priorité 3 : heuristiques port/service ───────────────────────────────
+    if state == "filtered":
+        if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
+            return "high", "ELEVE", "heuristic"
+        return "low", "FAIBLE", "heuristic"
+
+    # state == "open"
     if port in CRITICAL_PORTS or name in HIGH_RISK_SERVICES:
-        return "high", "ELEVE"
+        return "high", "ELEVE", "heuristic"
     if port < 1024:
-        return "medium", "MODERE"
-    return "low", "FAIBLE"
+        return "medium", "MODERE", "heuristic"
+    return "low", "FAIBLE", "heuristic"
+
+
+def _build_recommendation(
+    sev_class: str,
+    product: str,
+    version: str,
+    cve_list: list,
+) -> str:
+    """
+    Génère une recommandation contextuelle en langage accessible.
+
+    Si le logiciel est connu, précise qu'il faut le mettre à jour.
+    Les CVE et scores techniques sont relégués à la note technique.
+    """
+    base = RECOMMENDATIONS[sev_class]
+    extras: list[str] = []
+
+    # Mentionner la mise à jour si le logiciel est identifié
+    if product and version:
+        extras.append(
+            f"Le logiciel \"{product}\" (version {version}) doit être mis à jour "
+            f"vers la dernière version disponible."
+        )
+    elif product:
+        extras.append(
+            f"Vérifiez que le logiciel \"{product}\" est à jour et correctement configuré."
+        )
+
+    # Nombre de failles référencées (sans les IDs techniques)
+    n_cves = len([c for c in cve_list if isinstance(c, dict)])
+    if n_cves == 1:
+        extras.append("1 faille de sécurité officielle a été référencée sur ce service.")
+    elif n_cves > 1:
+        extras.append(f"{n_cves} failles de sécurité officielles ont été référencées sur ce service.")
+
+    if extras:
+        return f"{base} {' '.join(extras)}"
+    return base
 
 
 def _format_service(pinfo: dict) -> str:
@@ -272,7 +911,7 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
         protocols = []
 
     for proto in protocols:
-        for port in data[proto].keys():
+        for port in data[proto]:
             pinfo = data[proto][port]
             state = pinfo.get("state", "")
             if state not in ("open", "filtered"):
@@ -284,29 +923,60 @@ def _build_host(ip: str, data, total_ports: int, cache: dict) -> dict:
             else:
                 filtered_count += 1
 
+            product = (pinfo.get("product") or "").strip()
+            version = (pinfo.get("version") or "").strip()
+            script_data = pinfo.get("script", {}) if isinstance(pinfo.get("script"), dict) else {}
+
+            # Enrichissement CVE/CVSS (scripts nmap + NVD si disponible)
+            cve_data = cve_mod.get_cve_data(product, version, script_data, cache)
+
+            # Enrichissement exploit searchsploit (fallback / complément)
             query = software_query(pinfo)
             found = exploit_mod.find(query, cache=cache)
 
-            sev_class, sev_text = _classify(port, pinfo, found)
+            sev_class, sev_text, confidence = _classify(port, pinfo, found, cve_data)
             sev_counts[sev_class] += 1
+
+            if confidence == "potential":
+                log.debug(
+                    "%s:%d — searchsploit match '%s' (%d résultat(s)) — à vérifier manuellement",
+                    ip, port, software_query(pinfo), len(found),
+                )
 
             svc = _format_service(pinfo)
             svc_key = (pinfo.get("name") or svc or "inconnu").strip().lower()
             services[svc_key] = services.get(svc_key, 0) + 1
 
+            conf_label, conf_source = CONFIDENCE_LABELS.get(confidence, ("?", "?"))
+            recommendation = _build_recommendation(
+                sev_class, product, version, cve_data["cve_list"]
+            )
+            svc_label = _plain_service(port, pinfo)
+            urgency_label, urgency_color = _URGENCY_LABELS.get(sev_class, ("À planifier", "#64748b"))
+
             vulns.append({
-                "port":           port,
-                "protocol":       proto.upper(),
-                "state":          state,
-                "service":        svc,
-                "severity_class": sev_class,
-                "severity_text":  sev_text,
-                "exploit_count":  len(found),
-                "exploits":       [e.get("Title", "?") for e in found[:3]],
-                "recommendation": RECOMMENDATIONS[sev_class],
-                "product":        (pinfo.get("product") or "").strip(),
-                "version":        (pinfo.get("version") or "").strip(),
-                "desc":           svc,
+                "port":             port,
+                "protocol":         proto.upper(),
+                "state":            state,
+                "service":          svc,
+                "service_label":    svc_label,
+                "severity_class":   sev_class,
+                "severity_text":    sev_text,
+                "confidence":       confidence,
+                "confidence_label": conf_label,
+                "confidence_source": conf_source,
+                "exploit_count":    len(found),
+                "exploits":         [e.get("Title", "?") for e in found[:3]],
+                "recommendation":   recommendation,
+                "product":          product,
+                "version":          version,
+                "desc":             _format_service(pinfo),
+                "business_impact":  _BUSINESS_IMPACTS.get(sev_class, ""),
+                "urgency_label":    urgency_label,
+                "urgency_color":    urgency_color,
+                "max_cvss":         cve_data["max_cvss"],
+                "cvss_source":      cve_data["source"],
+                "cve_list":         cve_data["cve_list"],
             })
 
     # Tri : ports ouverts d'abord, puis sévérité décroissante
@@ -412,9 +1082,9 @@ def _generate_network_map_image(topology: list) -> str:
     try:
         import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
         import matplotlib.patches as mpatches
-        from matplotlib.patches import FancyBboxPatch, Circle
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle, FancyBboxPatch
     except ImportError:
         log.warning("matplotlib non disponible — cartographie image désactivée.")
         return ""
@@ -493,7 +1163,7 @@ def _generate_network_map_image(topology: list) -> str:
             fontsize=7.5, fontweight="bold", color="white", zorder=6)
 
     # ── Sous-réseaux et hôtes ───────────────────────────────────────────────────
-    for i, (net, sx, sw) in enumerate(zip(topology, sub_xs, sub_widths)):
+    for net, sx, sw in zip(topology, sub_xs, sub_widths, strict=False):
         net_risk_col = RISK_COL.get(net["risk"], "#64748b")
 
         # Ligne LAN → sous-réseau
@@ -708,8 +1378,9 @@ def build_report_data(
         if _h.get("unreachable"):
             unreachable_count += 1
 
-    action_plan = _build_action_plan(hosts)
-    summary_text = _plain_summary(global_risk, n_hosts, n_critical, n_vulns, risk_dist)
+    action_plan       = _build_action_plan(hosts)
+    remediation_guide = _build_remediation_guide(hosts)
+    summary_text      = _plain_summary(global_risk, n_hosts, n_critical, n_vulns, risk_dist)
 
     # Collecte le résultat matplotlib (prêt ou presque prêt à ce stade)
     try:
@@ -719,6 +1390,54 @@ def build_report_data(
         network_map_img = ""
     finally:
         _map_executor.shutdown(wait=False)
+
+    top_open_ports = _build_top_open_ports(hosts)
+
+    # Résumé par urgence (pour la timeline)
+    urgency_summary = {"today": 0, "48h": 0, "2weeks": 0}
+    for a in action_plan:
+        sev = a["severity_class"]
+        if sev == "critical":
+            urgency_summary["today"] += 1
+        elif sev == "high":
+            urgency_summary["48h"] += 1
+        elif sev == "medium":
+            urgency_summary["2weeks"] += 1
+
+    # Prochaines étapes concrètes
+    next_steps: list[str] = []
+    if urgency_summary["today"]:
+        next_steps.append(
+            f"Contacter immédiatement votre responsable informatique "
+            f"pour traiter les {urgency_summary['today']} point(s) critique(s) identifié(s)."
+        )
+    if urgency_summary["48h"]:
+        next_steps.append(
+            f"Dans les 48 heures, planifier la mise à jour et la sécurisation "
+            f"des {urgency_summary['48h']} service(s) à risque élevé."
+        )
+    if urgency_summary["2weeks"]:
+        next_steps.append(
+            f"D'ici deux semaines, effectuer une revue de configuration "
+            f"pour les {urgency_summary['2weeks']} point(s) modérés."
+        )
+    if not next_steps:
+        next_steps.append(
+            "Intégrer les points de vigilance identifiés à votre prochaine maintenance informatique."
+        )
+    next_steps.append(
+        "Conserver ce rapport et le remettre à votre prestataire informatique "
+        "pour mise en œuvre des corrections."
+    )
+
+    # Déduplication des CVE sur tous les hôtes
+    all_cve_ids: set = set()
+    for h in hosts:
+        for v in h.get("vulnerabilities", []):
+            for c in v.get("cve_list", []):
+                if isinstance(c, dict) and c.get("cve_id"):
+                    all_cve_ids.add(c["cve_id"])
+    total_cves = len(all_cve_ids)
 
     target_ips = [h["ip"] for h in all_hosts]
 
@@ -753,7 +1472,13 @@ def build_report_data(
         "duration":               "",
         "hosts":                  hosts,
         "action_plan":            action_plan,
+        "remediation_guide":      remediation_guide,
         "plain_summary":          summary_text,
+        "top_open_ports":         top_open_ports,
+        "total_cves":             total_cves,
+        "scan_profile":           "",
+        "urgency_summary":        urgency_summary,
+        "next_steps":             next_steps,
     }
 
 
@@ -764,6 +1489,7 @@ def generate_report(
     total_ports: int = 100,
     cache: dict | None = None,
     discovered_ips: list | None = None,
+    scan_profile: str = "",
 ) -> str:
     """
     Génère le rapport PDF et retourne son chemin.
@@ -776,17 +1502,21 @@ def generate_report(
         cache:          Cache exploit partagé (optionnel)
         discovered_ips: Toutes les IPs découvertes (ARP + nmap ping)
     """
-    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d_%H%M%S")
     if output_path is None:
-        output_path = f"rapports/Rapport_Audit_{ts}.pdf"
+        output_dir = os.environ.get("RECONENGINE_OUTPUT_DIR", "rapports")
+        output_path = f"{output_dir}/Rapport_Audit_{ts}.pdf"
 
     out = pathlib.Path(output_path).resolve()
-    # Bloquer les path traversal : le PDF doit rester dans le répertoire de travail courant
-    try:
-        out.relative_to(pathlib.Path.cwd())
-    except ValueError:
+    # Bloquer les path traversal : le PDF doit rester dans le répertoire de sortie configuré.
+    # On ancre sur RECONENGINE_OUTPUT_DIR (ou "rapports" par défaut) plutôt que sur cwd()
+    # pour rester correct quelle que soit la working directory au moment de l'appel.
+    output_root = pathlib.Path(
+        os.environ.get("RECONENGINE_OUTPUT_DIR", "rapports")
+    ).resolve()
+    if not str(out).startswith(str(output_root) + os.sep):
         raise ValueError(
-            f"Chemin de sortie non autorisé (hors du répertoire courant) : {out}"
+            f"Chemin de sortie non autorisé (doit être dans {output_root}) : {out}"
         )
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -798,13 +1528,29 @@ def generate_report(
     )
     if duration:
         data["duration"] = duration
+    if scan_profile:
+        data["scan_profile"] = scan_profile
 
-    env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+    env = Environment(
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
+        autoescape=select_autoescape(["html"]),
+    )
     template = env.get_template("report.html")
     html_content = template.render(data)
 
+    def _local_url_fetcher(url: str) -> dict:
+        # Block any resource not under the templates directory — prevents
+        # WeasyPrint from following injected file:// or http:// URIs that
+        # could originate from unescaped nmap banner data.
+        resolved = pathlib.Path(url.removeprefix("file://")).resolve() if url.startswith("file://") else None
+        if resolved is None or not str(resolved).startswith(str(TEMPLATES_DIR)):
+            raise URLFetchingError(f"Ressource externe bloquée : {url}")
+        return default_url_fetcher(url)
+
     log.info("Rendu PDF en cours...")
-    HTML(string=html_content, base_url=str(TEMPLATES_DIR)).write_pdf(str(out))
+    HTML(string=html_content, base_url=str(TEMPLATES_DIR)).write_pdf(
+        str(out), url_fetcher=_local_url_fetcher
+    )
     os.chmod(out, 0o600)
     log.info("Rapport généré : %s", out)
     return str(out)
@@ -812,6 +1558,7 @@ def generate_report(
 
 if __name__ == "__main__":
     import logging as _log
+
     import scan as _scan
     _log.basicConfig(level=_log.INFO, format="%(levelname)s  %(message)s")
     print("Scan de test sur 127.0.0.1...")

@@ -21,9 +21,8 @@ try:
 except ImportError:
     _HAS_FCNTL = False  # Windows — _get_netmask() retourne None, fallback /24
 
-from scapy.all import arping, get_if_addr, get_if_list
-
 import scan
+from scapy.all import arping, get_if_addr, get_if_list
 
 log = logging.getLogger(__name__)
 
@@ -39,12 +38,11 @@ def _get_netmask(ifname: str) -> str | None:
     if not _HAS_FCNTL:
         return None
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        result = fcntl.ioctl(
-            s.fileno(), 0x891B,
-            struct.pack("256s", ifname.encode()[:15]),
-        )
-        s.close()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            result = fcntl.ioctl(
+                s.fileno(), 0x891B,
+                struct.pack("256s", ifname.encode()[:15]),
+            )
         return socket.inet_ntoa(result[20:24])
     except Exception:
         return None
@@ -62,8 +60,9 @@ def _interface_networks() -> tuple[dict, set]:
                 continue
             local_ips.add(ip)
             netmask = _get_netmask(iface)
+            mask = netmask if (netmask and netmask != "0.0.0.0") else "24"
             net = ipaddress.ip_network(
-                f"{ip}/{netmask}" if (netmask and netmask != "0.0.0.0") else f"{ip}/24",
+                f"{ip}/{mask}",
                 strict=False,
             )
             if net.prefixlen < 8:  # ignore les réseaux absurdement larges
@@ -77,31 +76,37 @@ def _interface_networks() -> tuple[dict, set]:
     return networks, local_ips
 
 
-def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5) -> dict:
+def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 1) -> dict:
     """
     ARP broadcast sur le réseau. Retourne {ip: {"ip": str, "mac": str}}.
 
-    Une seule passe avec inter=0 (rafale de paquets) : plus rapide que plusieurs
-    passes séquentielles avec timeout complet chacune.
+    `retry` passes avec inter=0 (rafale de paquets) pour améliorer la détection
+    sur les réseaux WiFi où des réponses ARP peuvent être perdues.
     """
     if not _is_root():
         log.warning("[ARP] Ignoré — droits root requis.")
         return {}
+    # Sur les grands réseaux WiFi, les paquets ARP transitent via l'AP et les
+    # délais de réponse sont plus élevés qu'en filaire — augmenter le timeout.
     if network.prefixlen <= 16:
-        timeout = max(timeout, 10)  # plus de temps sur grands réseaux
+        timeout = max(timeout, 30)   # /16 = 65536 hôtes, WiFi latency
+    elif network.prefixlen <= 20:
+        timeout = max(timeout, 15)   # /17–/20
 
     hosts: dict = {}
-    try:
-        # inter=0 : pas de délai entre les paquets ARP → rafale maximale
-        ans, _ = arping(str(network), timeout=timeout, verbose=False, inter=0)
-        for _, rcv in ans:
-            ip = rcv.psrc
-            if ip not in hosts:
-                hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
-    except PermissionError:
-        log.error("[ARP] Permission refusée (nécessite root).")
-    except Exception as e:
-        log.warning("[ARP] Erreur : %s", e)
+    for _ in range(max(1, retry)):
+        try:
+            ans, _ = arping(str(network), timeout=timeout, verbose=False, inter=0)
+            for _, rcv in ans:
+                ip = rcv.psrc
+                if ip not in hosts:
+                    hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
+        except PermissionError:
+            log.error("[ARP] Permission refusée (nécessite root).")
+            break  # unrecoverable — root required
+        except Exception as e:
+            log.warning("[ARP] Erreur : %s", e)
+            # transient error — continue remaining retries
     return hosts
 
 
@@ -218,6 +223,9 @@ def discover(
             k: v for k, v in networks.items()
             if not iface or v["iface"] == iface
         }
+        if not filtered:
+            log.warning("Interface '%s' introuvable ou sans IP.", iface)
+            return []
         with ThreadPoolExecutor(max_workers=min(len(filtered), 4)) as ex:
             futures = {ex.submit(_scan_iface, k, v): k for k, v in filtered.items()}
             for fut in as_completed(futures):
