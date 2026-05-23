@@ -287,28 +287,9 @@ def main() -> None:
 
     console.print(f"[dim]Durée totale : {duration}[/]")
 
-    # Indicateur final basé sur la sévérité max trouvée
     def _set_final_state() -> None:
-        any_critical = False
-        for data in scan_results.values():
-            try:
-                for proto in data.all_protocols():
-                    for port in data[proto]:
-                        pinfo = data[proto][port]
-                        if pinfo.get("state") != "open":
-                            continue
-                        # Port critique ou service à risque élevé → flag critical
-                        if (port in rapport.CRITICAL_PORTS
-                                or (pinfo.get("name") or "").lower() in rapport.HIGH_RISK_SERVICES):
-                            any_critical = True
-                            break
-                    if any_critical:
-                        break
-            except Exception:
-                continue
-            if any_critical:
-                break
-        status.set_state(status.State.DONE_CRITICAL if any_critical else status.State.DONE_OK)
+        critical = rapport.has_critical_exposure(scan_results)
+        status.set_state(status.State.DONE_CRITICAL if critical else status.State.DONE_OK)
 
     if args.no_pdf:
         _set_final_state()
@@ -323,7 +304,8 @@ def main() -> None:
     console.print("\n[bold]Phase 4[/] — Génération du rapport PDF")
     n_ports = 65535 if twophase else _port_count(cfg.scan.ports)
     output_path = args.output or (
-        f"{cfg.output_dir}/Rapport_Audit_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        f"{cfg.output_dir}/Rapport_Audit_"
+        f"{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d_%H%M%S')}.pdf"
     )
     try:
         out = rapport.generate_report(

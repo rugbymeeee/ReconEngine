@@ -1,187 +1,80 @@
-.glossaire td:last-child { color: var(--ink-600); }
-
-/* ── Pied de page ─────────────────────────────────────────────────────────── */
-.doc-footer {
-  text-align: center;
-  font-size: 8pt;
-  color: var(--ink-400);
-  margin-top: 36px;
-  padding-top: 10px;
-  border-top: 1px solid var(--ink-200);
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Rapport d'Audit — ReconEngine {{ scan_id }}</title>
+<style>
+/* ── Variables ────────────────────────────────────────────────────────────── */
+:root {
+  --brand-900: #050e1a;
+  --brand-800: #0a2540;
+  --brand-700: #1a4a7a;
+  --brand-500: #2d7dd2;
+  --brand-accent: #00c2d4;
+  --brand-accent2: #7c3aed;
+  --ink-900: #0f172a;
+  --ink-700: #1e293b;
+  --ink-600: #475569;
+  --ink-400: #94a3b8;
+  --ink-200: #e2e8f0;
+  --ink-100: #f1f5f9;
+  --surface:  #f8fafc;
+  --c-critical: #dc2626;
+  --c-critical-bg: #fff1f2;
+  --c-high:     #ea580c;
+  --c-high-bg:  #fff7ed;
+  --c-medium:   #d97706;
+  --c-medium-bg:#fffbeb;
+  --c-low:      #059669;
+  --c-low-bg:   #f0fdf4;
+  --c-filtered: #6b7280;
+  --c-open:     #0ea5e9;
+  --c-server:   #6366f1;
+  --c-workstation: #0891b2;
+  --c-unknown:  #64748b;
+  --c-unreachable: #9ca3af;
 }
 
-.page-break { page-break-before: always; }
+/* ── Mise en page standard ────────────────────────────────────────────────── */
+@page {
+  size: A4;
+  margin: 1.6cm 2cm 1.8cm;
+  @bottom-center {
+    content: counter(page) " / " counter(pages);
+    font-size: 8pt;
+    color: var(--ink-400);
+    font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+  }
+}
 
-/* ── Table des matières ───────────────────────────────────────────────────── */
-.toc-page { margin-bottom: 28px; }
-.toc-title { font-size: 13pt; font-weight: 700; color: var(--brand-900); margin-bottom: 16px; }
-.toc-list { list-style: none; padding: 0; margin: 0; }
-.toc-list li {
-  display: flex;
-  align-items: baseline;
-  gap: 0;
-  font-size: 9.5pt;
-  margin-bottom: 7px;
-  color: var(--ink-900);
-}
-.toc-list li .toc-num {
-  min-width: 24px;
-  font-weight: 700;
-  color: var(--brand-500);
-  flex-shrink: 0;
-}
-.toc-list li .toc-label { flex: 1; }
-.toc-list li .toc-dots {
-  flex: 1;
-  border-bottom: 1px dotted var(--ink-400);
-  margin: 0 6px 3px;
-}
-.toc-list li.toc-sub { padding-left: 24px; font-size: 8.5pt; color: var(--ink-600); }
-.toc-list li.toc-sub .toc-num { color: var(--ink-400); }
-
-/* ── Top ports chart ──────────────────────────────────────────────────────── */
-.top-ports-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-  margin-top: 10px;
-}
-.tp-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 8.5pt;
-  background: var(--surface);
-  border: 1px solid var(--ink-200);
-  border-radius: 4px;
-  padding: 5px 8px;
-}
-.tp-port {
-  font-family: monospace;
-  font-weight: 700;
-  color: var(--brand-700);
-  width: 42px;
-  flex-shrink: 0;
-}
-.tp-service { flex: 1; color: var(--ink-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tp-bar-wrap { width: 52px; background: #e2e8f0; border-radius: 2px; height: 6px; overflow: hidden; flex-shrink: 0; }
-.tp-bar-fill { height: 100%; border-radius: 2px; }
-.tp-count { width: 28px; text-align: right; font-weight: 600; color: var(--ink-600); flex-shrink: 0; }
-
-/* ── Méthodologie ─────────────────────────────────────────────────────────── */
-.methodology-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-top: 10px;
-}
-.meth-card {
-  background: var(--surface);
-  border: 1px solid var(--ink-200);
-  border-radius: 5px;
-  padding: 10px 12px;
-}
-.meth-card-title {
-  font-size: 8.5pt;
-  font-weight: 700;
-  color: var(--brand-700);
-  margin-bottom: 5px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.meth-card p {
-  font-size: 8pt;
-  color: var(--ink-600);
-  line-height: 1.5;
+/* ── Page de couverture (pas de marges, pas de numéro) ───────────────────── */
+@page cover {
   margin: 0;
+  @bottom-center { content: none; }
 }
 
-/* ── Lignes de vulnérabilité colorées ─────────────────────────────────────── */
-tr.row-critical td { background: #fff5f5 !important; }
-tr.row-high     td { background: #fff8f1 !important; }
-tr.row-medium   td { background: #fffdf0 !important; }
+* { box-sizing: border-box; }
 
-/* ── Mini-jauge hôte ──────────────────────────────────────────────────────── */
-.host-gauge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  position: relative;
-  margin-bottom: 4px;
+body {
+  font-family: "Segoe UI", "Helvetica Neue", "Calibri", sans-serif;
+  font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  color: var(--ink-900);
+  font-size: 9.5pt;
+  line-height: 1.6;
+  background: #fff;
 }
-.host-gauge-hole {
-  position: absolute;
-  width: 40px;
-  height: 40px;
-  background: rgba(255,255,255,0.15);
-  border-radius: 50%;
+
+/* ── PAGE DE COUVERTURE ───────────────────────────────────────────────────── */
+.cover-page {
+  page: cover;
+  page-break-after: always;
+  background: var(--brand-900);
+  color: #fff;
+  padding: 3cm 2.5cm 2.5cm;
+  height: 297mm;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-.host-gauge-score {
-  font-size: 10pt;
-  font-weight: 900;
-  color: #fff;
-  line-height: 1;
-}
-.host-gauge-unit { font-size: 6pt; color: rgba(255,255,255,0.7); }
-
-/* ── Exploit list ─────────────────────────────────────────────────────────── */
-.exploit-title {
-  font-size: 7.5pt;
-  color: var(--c-critical);
-  line-height: 1.4;
-  margin-bottom: 2px;
-}
-.exploit-title::before { content: "▸ "; }
-
-/* ── Metric bar inline ────────────────────────────────────────────────────── */
-.metric-bar-wrap { margin-top: 4px; background: rgba(0,0,0,0.08); border-radius: 2px; height: 4px; overflow: hidden; }
-.metric-bar-fill { height: 100%; border-radius: 2px; }
-</style>
-</head>
-<body>
-    <!-- KPI visuels (4 cartes) -->
-    <div class="kpi-cards">
-      <div class="kpi-card">
-        <div class="kpi-card-n">{{ host_count }}</div>
-        <div class="kpi-card-label">Machine(s) analysée(s)</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-card-n {% if critical_count %}red{% endif %}">{{ critical_count }}</div>
-        <div class="kpi-card-label">Problème(s) critique(s)<br>à traiter aujourd'hui</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-card-n {% if open_ports_count %}orange{% endif %}">{{ open_ports_count }}</div>
-        <div class="kpi-card-label">Service(s) accessibles<br>depuis le réseau</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-card-n green">{{ closed_ports_count }}</div>
-        <div class="kpi-card-label">Port(s) correctement<br>fermé(s)</div>
-      </div>
-    </div>
   justify-content: space-between;
-        <div class="summary-card">
-          <div class="summary-title">Synthèse de l'audit</div>
-          <div class="summary-score">{{ global_risk }}</div>
-          <div class="summary-score-label">Score : {{ risk_score }} / 100</div>
-        </div>
-        <div class="host-header {{ type_cls }}">
-      <div>
-        <div class="host-ip">{{ host.ip }}</div>
-        {% if host.mac and host.mac != 'N/A' %}
-        <div style="font-size:7.5pt;font-family:monospace;opacity:0.65;margin-top:2px;letter-spacing:0.5px">{{ host.mac }}</div>
-        {% endif %}
-        {% if host.os %}<div class="host-os">{{ host.os }}</div>{% endif %}
-        <div class="host-type-label">
-          {% if host.host_type == 'server' %}Serveur{% elif host.host_type == 'workstation' %}Poste de travail{% elif host.unreachable %}Machine hors ligne{% else %}Type inconnu{% endif %}
-        </div>
-      </div>
   position: relative;
   overflow: hidden;
 }
@@ -266,7 +159,7 @@ tr.row-medium   td { background: #fffdf0 !important; }
   margin-top: 8px;
 }
 
-/* Bannière de risque */
+/* Bannière de risque (pas de backdrop-filter — WeasyPrint ne le supporte pas) */
 .cv-risk-banner {
   text-align: center;
   border-radius: 8px;
@@ -274,7 +167,6 @@ tr.row-medium   td { background: #fffdf0 !important; }
   margin: 28px auto 0;
   display: inline-block;
   min-width: 280px;
-  backdrop-filter: blur(4px);
 }
 .cv-risk-banner.risk-critique { background: rgba(220,38,38,0.18); border: 1.5px solid rgba(220,38,38,0.7); }
 .cv-risk-banner.risk-eleve    { background: rgba(234,88,12,0.18);  border: 1.5px solid rgba(234,88,12,0.7); }
@@ -419,19 +311,44 @@ h3 {
   margin-bottom: 18px;
 }
 
-/* Ligne 1 : jauge + KPI cards côte à côte */
-.summary-top {
-  display: flex;
-  gap: 18px;
-  align-items: flex-start;
-  margin-bottom: 14px;
+/* summary-grid en table 3 colonnes : WeasyPrint gère parfaitement les tables,
+   contrairement à flex où l'imbrication d'une <table> .kpi-table cassait
+   l'alignement (valeurs projetées hors zone). */
+.summary-grid {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 18px 0;
+  margin-bottom: 12px;
 }
+.summary-grid > tbody > tr > td { vertical-align: top; padding: 0; }
+.summary-grid .grid-col-gauge { width: 120px; }
+.summary-grid .grid-col-chart { width: 200px; }
 
-/* Ligne 2 : graphique de répartition pleine largeur */
-.summary-bottom { margin-bottom: 12px; }
-
-/* Jauge SVG */
+/* Jauge SVG (stroke-dasharray) — compatible WeasyPrint, contrairement à conic-gradient.
+   Les attributs SVG (fill, stroke, stroke-width) sont posés directement sur les <circle>
+   plutôt qu'en CSS, car WeasyPrint ne reconnaît pas ces props en CSS. */
 .gauge-wrap { flex-shrink: 0; text-align: center; }
+.gauge-ring {
+  width: 100px;
+  height: 100px;
+  position: relative;
+  display: inline-block;
+}
+.gauge-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.gauge-hole {
+  position: absolute;
+  top: 13px; left: 13px;
+  width: 74px;
+  height: 74px;
+  background: #f0f7ff;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.gauge-score { font-size: 18pt; font-weight: 900; line-height: 1; }
+.gauge-unit  { font-size: 7.5pt; color: var(--ink-600); }
 .gauge-label {
   font-size: 7.5pt;
   font-weight: 700;
@@ -440,61 +357,34 @@ h3 {
   letter-spacing: 1.2px;
 }
 
-/* KPI visuels — grille 2×2 */
-.kpi-cards {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-.kpi-card {
-  border-radius: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--ink-200);
-  background: #fff;
-}
-.kpi-card-n {
-  font-size: 22pt;
-  font-weight: 900;
-  line-height: 1;
-  color: var(--brand-700);
-}
-.kpi-card-n.red    { color: var(--c-critical); }
-.kpi-card-n.orange { color: var(--c-high); }
-.kpi-card-n.green  { color: var(--c-low); }
-.kpi-card-label {
-  font-size: 8pt;
-  color: var(--ink-600);
-  margin-top: 3px;
-  line-height: 1.3;
-}
-
-/* Tableau KPI (pour la vue technique compacte) */
-.kpi-table { width: 100%; border-collapse: collapse; font-size: 9pt; }
-.kpi-table td { padding: 3px 6px; border: none; }
+/* KPI */
+.kpi-table { flex: 1; border-collapse: collapse; font-size: 9pt; }
+.kpi-table td { padding: 3.5px 8px; border: none; }
 .kpi-table tr td:first-child { color: var(--ink-600); }
-.kpi-table tr td:last-child  { font-weight: 700; text-align: right; white-space: nowrap; }
+.kpi-table tr td:last-child  { font-weight: 700; text-align: right; }
 
-/* Graphique de répartition (pleine largeur, 4 barres horizontales) */
+/* Graphique de répartition */
+.chart-wrap { min-width: 185px; }
 .chart-title {
   font-size: 7.5pt;
   font-weight: 700;
   color: var(--ink-600);
   text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 7px;
+  letter-spacing: 1.2px;
+  margin-bottom: 10px;
 }
 .sev-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 5px;
-  font-size: 8.5pt;
+  gap: 7px;
+  margin-bottom: 7px;
+  font-size: 8pt;
 }
-.sev-lbl  { width: 90px; text-align: right; font-weight: 700; font-size: 7.5pt; flex-shrink: 0; }
-.sev-bg   { flex: 1; background: #e2e8f0; border-radius: 3px; height: 13px; overflow: hidden; }
-.sev-fill { height: 100%; border-radius: 3px; min-width: 3px; }
-.sev-n    { width: 32px; text-align: right; font-weight: 600; color: var(--ink-600); flex-shrink: 0; }
+.sev-lbl  { width: 62px; text-align: right; font-weight: 700; font-size: 7pt; letter-spacing: 0.3px; }
+.sev-bg   { flex: 1; background: var(--ink-200); border-radius: 4px; height: 13px; overflow: hidden; position: relative; }
+.sev-fill { height: 100%; border-radius: 4px; min-width: 4px; }
+.sev-pct  { position: absolute; right: 4px; top: 0; bottom: 0; display: flex; align-items: center; font-size: 6.5pt; font-weight: 700; color: rgba(0,0,0,0.4); }
+.sev-n    { width: 24px; text-align: right; font-weight: 700; color: var(--ink-700); font-size: 8.5pt; }
 
 .summary-text {
   font-size: 9pt;
@@ -507,7 +397,7 @@ h3 {
 /* ── Section "Ce que cela signifie" ──────────────────────────────────────── */
 .plain-summary {
   border-radius: 8px;
-  padding: 18px 20px;
+  padding: 16px 18px;
   margin-bottom: 18px;
 }
 .plain-summary.risk-critique { background: #fff1f2; border-left: 5px solid var(--c-critical); }
@@ -516,68 +406,25 @@ h3 {
 .plain-summary.risk-faible   { background: #f0fdf4; border-left: 5px solid var(--c-low); }
 
 .plain-summary h3 {
-  font-size: 11pt;
+  font-size: 10.5pt;
   margin-bottom: 10px;
   color: var(--brand-900);
 }
 .plain-summary p {
-  font-size: 10pt;
-  line-height: 1.75;
+  font-size: 9.5pt;
+  line-height: 1.7;
   color: var(--ink-900);
-  margin: 0 0 14px;
+  margin: 0 0 12px;
 }
 
-/* Timeline d'urgence */
-.urgency-timeline {
-  display: flex;
-  gap: 10px;
-  margin: 14px 0 4px;
-}
-.urgency-block {
-  flex: 1;
-  border-radius: 7px;
-  padding: 10px 12px;
-  text-align: center;
-  border: 1px solid transparent;
-}
-.urgency-block.today  { background: #fee2e2; border-color: #fca5a5; }
-.urgency-block.h48    { background: #ffedd5; border-color: #fdba74; }
-.urgency-block.w2     { background: #fef9c3; border-color: #fde047; }
-.urgency-block.later  { background: #f0fdf4; border-color: #bbf7d0; }
-.urgency-block-n {
-  font-size: 20pt;
-  font-weight: 900;
-  line-height: 1;
-}
-.urgency-block.today .urgency-block-n  { color: var(--c-critical); }
-.urgency-block.h48   .urgency-block-n  { color: var(--c-high); }
-.urgency-block.w2    .urgency-block-n  { color: var(--c-medium); }
-.urgency-block.later .urgency-block-n  { color: var(--c-low); }
-.urgency-block-lbl {
-  font-size: 8pt;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-top: 3px;
-}
-.urgency-block.today .urgency-block-lbl { color: #991b1b; }
-.urgency-block.h48   .urgency-block-lbl { color: #9a3412; }
-.urgency-block.w2    .urgency-block-lbl { color: #854d0e; }
-.urgency-block.later .urgency-block-lbl { color: #166534; }
-.urgency-block-sub {
-  font-size: 7pt;
-  color: var(--ink-600);
-  margin-top: 2px;
-}
-
-.risk-dist-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.risk-dist-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .risk-pill {
   display: flex;
   align-items: center;
   gap: 6px;
   border-radius: 20px;
-  padding: 5px 14px;
-  font-size: 9pt;
+  padding: 4px 12px;
+  font-size: 8.5pt;
   font-weight: 600;
 }
 .risk-pill.critique { background: #fee2e2; color: #991b1b; }
@@ -585,80 +432,12 @@ h3 {
 .risk-pill.modere   { background: #fef9c3; color: #854d0e; }
 .risk-pill.faible   { background: #dcfce7; color: #166534; }
 .risk-pill .pill-dot {
-  width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0;
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
 }
 .risk-pill.critique .pill-dot { background: var(--c-critical); }
 .risk-pill.eleve    .pill-dot { background: var(--c-high); }
 .risk-pill.modere   .pill-dot { background: var(--c-medium); }
 .risk-pill.faible   .pill-dot { background: var(--c-low); }
-
-/* ── Chip d'urgence ───────────────────────────────────────────────────────── */
-.urgency-chip {
-  display: inline-block;
-  border-radius: 12px;
-  padding: 2px 9px;
-  font-size: 7.5pt;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-/* ── Box impact métier ────────────────────────────────────────────────────── */
-.impact-box {
-  background: #f8fafc;
-  border-left: 3px solid var(--ink-400);
-  padding: 6px 10px;
-  margin-top: 5px;
-  font-size: 8.5pt;
-  color: var(--ink-600);
-  border-radius: 0 4px 4px 0;
-  font-style: italic;
-}
-.impact-box.critical { border-color: var(--c-critical); background: #fff5f5; color: #991b1b; }
-.impact-box.high     { border-color: var(--c-high);     background: #fff8f1; color: #9a3412; }
-.impact-box.medium   { border-color: var(--c-medium);   background: #fffdf0; color: #854d0e; }
-
-/* ── Prochaines étapes ────────────────────────────────────────────────────── */
-.next-steps-list {
-  list-style: none;
-  padding: 0;
-  margin: 10px 0 0;
-}
-.next-steps-list li {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  margin-bottom: 8px;
-  border: 1px solid var(--ink-200);
-  background: var(--surface);
-  font-size: 9.5pt;
-  color: var(--ink-900);
-  line-height: 1.55;
-}
-.next-steps-num {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--brand-500);
-  color: #fff;
-  font-size: 9pt;
-  font-weight: 900;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
-/* ── Note technique (repliée visuellement) ────────────────────────────────── */
-.tech-note {
-  font-size: 7pt;
-  color: var(--ink-400);
-  margin-top: 4px;
-  font-family: monospace;
-  line-height: 1.4;
-}
 
 /* ── Plan d'action ────────────────────────────────────────────────────────── */
 .action-num {
@@ -686,137 +465,6 @@ h3 {
   padding: 1px 5px;
   margin-top: 3px;
 }
-
-/* ── Guide de remédiation ─────────────────────────────────────────────────── */
-/* Complexité */
-.cplx-facile { background:#f0fdf4; border:1px solid #86efac; }
-.cplx-facile .cplx-val { color:#059669; }
-.cplx-moyen  { background:#fffbeb; border:1px solid #fde68a; }
-.cplx-moyen  .cplx-val { color:#d97706; }
-.cplx-expert { background:#fff1f2; border:1px solid #fca5a5; }
-.cplx-expert .cplx-val { color:#dc2626; }
-/* Urgence */
-.urg-critical { background:#dc2626; }
-.urg-high     { background:#ea580c; }
-.urg-medium   { background:#d97706; }
-.urg-low      { background:#059669; }
-
-.rem-section { margin-bottom: 24px; }
-.rem-card {
-  border: 1px solid var(--ink-200);
-  border-radius: 8px;
-  margin-bottom: 14px;
-  overflow: hidden;
-  page-break-inside: avoid;
-}
-.rem-card-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--ink-200);
-}
-.rem-port-badge {
-  font-size: 9pt;
-  font-weight: 900;
-  font-family: monospace;
-  background: var(--brand-900);
-  color: #fff;
-  border-radius: 4px;
-  padding: 3px 8px;
-  flex-shrink: 0;
-}
-.rem-title {
-  font-size: 10pt;
-  font-weight: 700;
-  color: var(--brand-900);
-  flex: 1;
-}
-.rem-urgency {
-  font-size: 7.5pt;
-  font-weight: 700;
-  border-radius: 3px;
-  padding: 2px 8px;
-  color: #fff;
-  flex-shrink: 0;
-}
-.rem-card-body {
-  padding: 12px 14px;
-  display: flex;
-  gap: 16px;
-}
-.rem-left { flex: 1; }
-.rem-right {
-  min-width: 120px;
-  max-width: 140px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.rem-label {
-  font-size: 7.5pt;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--ink-400);
-  margin-bottom: 3px;
-}
-.rem-text {
-  font-size: 8.5pt;
-  color: var(--ink-900);
-  line-height: 1.55;
-  margin-bottom: 8px;
-}
-.rem-danger {
-  font-size: 8.5pt;
-  color: #92400e;
-  background: #fffbeb;
-  border-left: 3px solid #fde68a;
-  padding: 6px 10px;
-  border-radius: 0 4px 4px 0;
-  line-height: 1.5;
-  margin-bottom: 10px;
-}
-.rem-steps {
-  margin: 0;
-  padding-left: 0;
-  list-style: none;
-}
-.rem-steps li {
-  font-size: 8.5pt;
-  color: var(--ink-900);
-  line-height: 1.55;
-  padding: 4px 0 4px 22px;
-  position: relative;
-  border-bottom: 1px solid #f1f5f9;
-}
-.rem-steps li:last-child { border-bottom: none; }
-.rem-steps li::before {
-  content: attr(data-n);
-  position: absolute;
-  left: 0;
-  top: 4px;
-  width: 16px;
-  height: 16px;
-  background: var(--brand-500);
-  color: #fff;
-  border-radius: 50%;
-  font-size: 7pt;
-  font-weight: 900;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  line-height: 16px;
-}
-.rem-meta-box {
-  border-radius: 5px;
-  padding: 7px 10px;
-  font-size: 8pt;
-}
-.rem-meta-label { font-weight: 700; font-size: 7pt; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 2px; }
 
 /* ── Tableaux ─────────────────────────────────────────────────────────────── */
 table {
@@ -1024,22 +672,6 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
 .exploit-list { font-size: 8pt; color: var(--c-critical); }
 .no-exploit   { font-size: 8pt; color: var(--ink-400); }
 
-/* Badges de confiance */
-.conf-badge {
-  display: inline-block;
-  font-size: 6.5pt;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  border-radius: 3px;
-  padding: 1px 5px;
-  margin-top: 3px;
-  white-space: nowrap;
-}
-.conf-confirmed { background: #dcfce7; color: #15803d; }
-.conf-probable  { background: #dbeafe; color: #1d4ed8; }
-.conf-potential { background: #fef9c3; color: #92400e; border: 1px solid #fde68a; }
-.conf-heuristic { background: #f1f5f9; color: var(--ink-600); }
-
 /* Hôte inaccessible */
 .unreachable-notice {
   background: #f1f5f9;
@@ -1077,137 +709,192 @@ tr.row-low      td { border-left: 3px solid var(--c-low); }
 
 .page-break { page-break-before: always; }
 
-/* ── Table des matières ───────────────────────────────────────────────────── */
-.toc-page { margin-bottom: 28px; }
-.toc-title { font-size: 13pt; font-weight: 700; color: var(--brand-900); margin-bottom: 16px; }
-.toc-list { list-style: none; padding: 0; margin: 0; }
-.toc-list li {
-  display: flex;
-  align-items: baseline;
-  gap: 0;
-  font-size: 9.5pt;
-  margin-bottom: 7px;
-  color: var(--ink-900);
-}
-.toc-list li .toc-num {
-  min-width: 24px;
-  font-weight: 700;
-  color: var(--brand-500);
-  flex-shrink: 0;
-}
-.toc-list li .toc-label { flex: 1; }
-.toc-list li .toc-dots {
-  flex: 1;
-  border-bottom: 1px dotted var(--ink-400);
-  margin: 0 6px 3px;
-}
-.toc-list li.toc-sub { padding-left: 24px; font-size: 8.5pt; color: var(--ink-600); }
-.toc-list li.toc-sub .toc-num { color: var(--ink-400); }
-
-/* ── Top ports chart ──────────────────────────────────────────────────────── */
-.top-ports-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-  margin-top: 10px;
-}
-.tp-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 8.5pt;
-  background: var(--surface);
-  border: 1px solid var(--ink-200);
-  border-radius: 4px;
-  padding: 5px 8px;
-}
-.tp-port {
-  font-family: monospace;
-  font-weight: 700;
-  color: var(--brand-700);
-  width: 42px;
-  flex-shrink: 0;
-}
-.tp-service { flex: 1; color: var(--ink-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tp-bar-wrap { width: 52px; background: #e2e8f0; border-radius: 2px; height: 6px; overflow: hidden; flex-shrink: 0; }
-.tp-bar-fill { height: 100%; border-radius: 2px; }
-.tp-count { width: 28px; text-align: right; font-weight: 600; color: var(--ink-600); flex-shrink: 0; }
-
-/* ── Méthodologie ─────────────────────────────────────────────────────────── */
-.methodology-grid {
+/* ── Timeline d'urgence ────────────────────────────────────────────────────── */
+.urgency-timeline {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-top: 10px;
+  gap: 12px;
+  margin: 18px 0 8px;
 }
-.meth-card {
-  background: var(--surface);
+.urgency-card {
+  border-radius: 8px;
+  padding: 14px 16px;
   border: 1px solid var(--ink-200);
-  border-radius: 5px;
-  padding: 10px 12px;
+  border-left: 4px solid;
+  background: #fff;
 }
-.meth-card-title {
-  font-size: 8.5pt;
-  font-weight: 700;
-  color: var(--brand-700);
-  margin-bottom: 5px;
+.urgency-card.today    { border-left-color: var(--c-critical); background: var(--c-critical-bg); }
+.urgency-card.h48      { border-left-color: var(--c-high);     background: var(--c-high-bg); }
+.urgency-card.w2       { border-left-color: var(--c-medium);   background: var(--c-medium-bg); }
+.urgency-card-when {
+  font-size: 7.5pt;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.meth-card p {
-  font-size: 8pt;
+  letter-spacing: 1.5px;
   color: var(--ink-600);
-  line-height: 1.5;
-  margin: 0;
-}
-
-/* ── Lignes de vulnérabilité colorées ─────────────────────────────────────── */
-tr.row-critical td { background: #fff5f5 !important; }
-tr.row-high     td { background: #fff8f1 !important; }
-tr.row-medium   td { background: #fffdf0 !important; }
-
-/* ── Mini-jauge hôte ──────────────────────────────────────────────────────── */
-.host-gauge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  position: relative;
+  font-weight: 700;
   margin-bottom: 4px;
 }
-.host-gauge-hole {
-  position: absolute;
-  width: 40px;
-  height: 40px;
-  background: rgba(255,255,255,0.15);
-  border-radius: 50%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-.host-gauge-score {
-  font-size: 10pt;
+.urgency-card-n {
+  font-size: 22pt;
   font-weight: 900;
-  color: #fff;
   line-height: 1;
 }
-.host-gauge-unit { font-size: 6pt; color: rgba(255,255,255,0.7); }
-
-/* ── Exploit list ─────────────────────────────────────────────────────────── */
-.exploit-title {
-  font-size: 7.5pt;
-  color: var(--c-critical);
+.urgency-card.today .urgency-card-n { color: var(--c-critical); }
+.urgency-card.h48   .urgency-card-n { color: var(--c-high); }
+.urgency-card.w2    .urgency-card-n { color: var(--c-medium); }
+.urgency-card-label {
+  font-size: 8pt;
+  color: var(--ink-600);
+  margin-top: 4px;
   line-height: 1.4;
-  margin-bottom: 2px;
 }
-.exploit-title::before { content: "▸ "; }
 
-/* ── Metric bar inline ────────────────────────────────────────────────────── */
-.metric-bar-wrap { margin-top: 4px; background: rgba(0,0,0,0.08); border-radius: 2px; height: 4px; overflow: hidden; }
-.metric-bar-fill { height: 100%; border-radius: 2px; }
+.next-steps {
+  background: var(--ink-100);
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin: 14px 0 24px;
+}
+.next-steps-title {
+  font-size: 9pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--brand-700);
+  margin-bottom: 8px;
+}
+.next-steps ol {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 9pt;
+  color: var(--ink-700);
+}
+.next-steps li { margin-bottom: 5px; line-height: 1.5; }
+
+/* ── Top ports table ──────────────────────────────────────────────────────── */
+.top-ports-section { margin-top: 16px; }
+.top-ports-title {
+  font-size: 8.5pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--ink-600);
+  margin-bottom: 8px;
+}
+.top-ports-table { width: 100%; }
+.top-ports-table td.port-num {
+  font-family: "Consolas", monospace;
+  font-weight: 700;
+  width: 70px;
+}
+.top-ports-table td.host-count {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  width: 110px;
+  color: var(--ink-600);
+}
+.host-count-bar {
+  display: inline-block;
+  height: 6px;
+  background: var(--brand-500);
+  border-radius: 3px;
+  margin-right: 8px;
+  vertical-align: middle;
+  opacity: 0.6;
+}
+
+/* ── Guide de remédiation ─────────────────────────────────────────────────── */
+.remediation-section { margin-top: 8px; }
+.remediation-card {
+  background: #fff;
+  border: 1px solid var(--ink-200);
+  border-left: 5px solid;
+  border-radius: 6px;
+  margin-bottom: 14px;
+  padding: 14px 18px;
+  page-break-inside: avoid;
+}
+.remediation-card.critical { border-left-color: var(--c-critical); }
+.remediation-card.high     { border-left-color: var(--c-high); }
+.remediation-card.medium   { border-left-color: var(--c-medium); }
+.remediation-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.remediation-titre {
+  font-size: 10.5pt;
+  font-weight: 700;
+  color: var(--ink-900);
+  flex: 1;
+}
+.remediation-port {
+  font-family: "Consolas", monospace;
+  font-size: 8pt;
+  color: var(--ink-400);
+  margin-left: 6px;
+}
+.remediation-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 8pt;
+  color: var(--ink-600);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--ink-200);
+}
+.remediation-meta strong { color: var(--ink-700); }
+.remediation-problem, .remediation-danger {
+  font-size: 9pt;
+  margin: 6px 0;
+  color: var(--ink-700);
+}
+.remediation-danger {
+  background: var(--c-critical-bg);
+  border-left: 3px solid var(--c-critical);
+  padding: 7px 11px;
+  border-radius: 3px;
+}
+.remediation-steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  font-size: 9pt;
+  color: var(--ink-700);
+}
+.remediation-steps li { margin-bottom: 4px; line-height: 1.5; }
+.remediation-urgency {
+  font-size: 7.5pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  color: #fff;
+  white-space: nowrap;
+}
+.remediation-urgency.critical { background: var(--c-critical); }
+.remediation-urgency.high     { background: var(--c-high); }
+.remediation-urgency.medium   { background: var(--c-medium); }
+
+/* ── Header metadata badges ───────────────────────────────────────────────── */
+.metadata-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.metadata-chip {
+  font-size: 7.5pt;
+  background: var(--ink-100);
+  color: var(--ink-700);
+  padding: 3px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--ink-200);
+}
+.metadata-chip strong { color: var(--brand-700); }
+
 </style>
 </head>
 <body>
@@ -1266,11 +953,6 @@ tr.row-medium   td { background: #fffdf0 !important; }
       <div><strong>Référence :</strong> {{ scan_id }}</div>
       {% if duration %}<div><strong>Durée du scan :</strong> {{ duration }}</div>{% endif %}
       <div><strong>Périmètre :</strong> {{ discovered_count }} hôte(s) sur le réseau</div>
-      {% if target_ips %}
-      <div style="margin-top:4px"><strong>IP(s) analysée(s) :</strong>
-        {% for ip in target_ips[:8] %}{{ ip }}{% if not loop.last %}, {% endif %}{% endfor %}{% if target_ips|length > 8 %} … (+{{ target_ips|length - 8 }}){% endif %}
-      </div>
-      {% endif %}
     </div>
     <div class="cv-confidential-bottom">
       DOCUMENT CONFIDENTIEL<br>
@@ -1298,147 +980,99 @@ tr.row-medium   td { background: #fffdf0 !important; }
   </div>
 </div>
 
-<h1>Rapport d'Audit de Sécurité Réseau</h1>
-
-<!-- ── Table des matières ─────────────────────────────────────────────────── -->
-<div class="toc-page">
-  <div class="toc-title">Table des matières</div>
-  <ul class="toc-list">
-    <li>
-      <span class="toc-num">1.</span>
-      <span class="toc-label">Synthèse de l'audit</span>
-      <span class="toc-dots"></span>
-    </li>
-    <li>
-      <span class="toc-num">2.</span>
-      <span class="toc-label">Ce que cela signifie pour vous</span>
-      <span class="toc-dots"></span>
-    </li>
-    <li>
-      <span class="toc-num">3.</span>
-      <span class="toc-label">Plan d'action — Que faire et quand ?</span>
-      <span class="toc-dots"></span>
-    </li>
-    <li>
-      <span class="toc-num">4.</span>
-      <span class="toc-label">Guide de remédiation — Comment corriger les failles</span>
-      <span class="toc-dots"></span>
-    </li>
-    <li>
-      <span class="toc-num">5.</span>
-      <span class="toc-label">Vue d'ensemble du réseau</span>
-      <span class="toc-dots"></span>
-    </li>
-    <li>
-      <span class="toc-num">6.</span>
-      <span class="toc-label">Cartographie du réseau</span>
-      <span class="toc-dots"></span>
-    </li>
-    {% for host in hosts %}
-    <li class="toc-sub">
-      <span class="toc-num">6.{{ loop.index }}</span>
-      <span class="toc-label">
-        Machine {{ host.ip }}{% if host.host_type == 'server' %} — Serveur{% elif host.host_type == 'workstation' %} — Poste de travail{% endif %}
-        <span class="badge {% if host.risk == 'CRITIQUE' %}critical{% elif host.risk == 'ELEVE' %}high{% elif host.risk == 'MODERE' %}medium{% else %}low{% endif %}" style="font-size:6pt;padding:1px 5px">{{ host.risk }}</span>
-      </span>
-      <span class="toc-dots"></span>
-    </li>
-    {% endfor %}
-    <li>
-      <span class="toc-num">7.</span>
-      <span class="toc-label">Prochaines étapes — Ce que vous devez faire</span>
-      <span class="toc-dots"></span>
-    </li>
-    <li>
-      <span class="toc-num">8.</span>
-      <span class="toc-label">Comment cet audit a été réalisé</span>
-      <span class="toc-dots"></span>
-    </li>
-    <li>
-      <span class="toc-num">9.</span>
-      <span class="toc-label">Glossaire</span>
-      <span class="toc-dots"></span>
-    </li>
-  </ul>
+<div class="metadata-row">
+  {% if scan_profile %}<span class="metadata-chip">Profil de scan : <strong>{{ scan_profile }}</strong></span>{% endif %}
+  {% if total_cves %}<span class="metadata-chip">CVE référencées : <strong>{{ total_cves }}</strong></span>{% endif %}
+  {% if duration %}<span class="metadata-chip">Durée : <strong>{{ duration }}</strong></span>{% endif %}
 </div>
+
+<h1>Rapport d'Audit de Sécurité Réseau</h1>
 
 <!-- ── Synthèse exécutive ─────────────────────────────────────────────────── -->
 <div class="summary-card">
-  <h3>Synthèse de l'audit</h3>
+  <h3>Synthèse exécutive</h3>
+  <table class="summary-grid"><tr>
 
-  <!-- Ligne 1 : jauge + KPI cards -->
-  <div class="summary-top">
-
-    <!-- Jauge de risque global (SVG — compatible WeasyPrint) -->
+    <!-- Jauge de risque global (SVG stroke-dasharray, compatible WeasyPrint).
+         Circonférence réelle utilisée (2π × 42 ≈ 263.89) car WeasyPrint
+         n'honore pas l'attribut SVG pathLength. -->
+    <td class="grid-col-gauge">
     <div class="gauge-wrap">
-      {% set gc_hex = '#dc2626' if global_risk == 'CRITIQUE' else ('#ea580c' if global_risk == 'ELEVE' else ('#d97706' if global_risk == 'MODERE' else '#059669')) %}
-      {% set gauge_dash = (risk_score * 2.325) | round(1) %}
-      <svg width="100" height="100" viewBox="0 0 100 100">
-        <circle cx="50" cy="50" r="37" fill="#f0f7ff" stroke="#e2e8f0" stroke-width="12"/>
-        <circle cx="50" cy="50" r="37" fill="none" stroke="{{ gc_hex }}" stroke-width="12"
-                stroke-dasharray="{{ gauge_dash }} 232.5"
-                stroke-linecap="round"
-                transform="rotate(-90 50 50)"/>
-        <text x="50" y="47" text-anchor="middle" font-size="17" font-weight="bold" fill="{{ gc_hex }}">{{ risk_score }}</text>
-        <text x="50" y="61" text-anchor="middle" font-size="8" fill="#475569">/100</text>
-      </svg>
-      <div class="gauge-label" style="color:{{ gc_hex }}">{{ global_risk }}</div>
+      {% set gc = '#dc2626' if global_risk == 'CRITIQUE' else ('#ea580c' if global_risk == 'ELEVE' else ('#d97706' if global_risk == 'MODERE' else '#059669')) %}
+      <div class="gauge-ring">
+        <svg viewBox="0 0 100 100">
+          <circle cx="50" cy="50" r="42"
+                  fill="none" stroke="#e2e8f0" stroke-width="10"/>
+          <circle cx="50" cy="50" r="42"
+                  fill="none" stroke="{{ gc }}" stroke-width="10" stroke-linecap="round"
+                  stroke-dasharray="{{ (risk_score * 2.6389) | round(2) }} 263.89"/>
+        </svg>
+        <div class="gauge-hole">
+          <span class="gauge-score" style="color:{{ gc }}">{{ risk_score }}</span>
+          <span class="gauge-unit">/100</span>
+        </div>
+      </div>
+      <div class="gauge-label" style="color:{{ gc }}">{{ global_risk }}</div>
     </div>
+    </td>
 
-    <div class="kpi-cards">
-      <div class="kpi-card">
-        <div class="kpi-card-n">{{ host_count }}</div>
-        <div class="kpi-card-label">Machine(s) analysée(s)</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-card-n {% if critical_count %}red{% endif %}">{{ critical_count }}</div>
-        <div class="kpi-card-label">Problème(s) critique(s)<br>à traiter aujourd'hui</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-card-n {% if open_ports_count %}orange{% endif %}">{{ open_ports_count }}</div>
-        <div class="kpi-card-label">Service(s) accessibles<br>depuis le réseau</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-card-n green">{{ closed_ports_count }}</div>
-        <div class="kpi-card-label">Port(s) correctement<br>fermé(s)</div>
-      </div>
-    </div>
+    <!-- KPI -->
+    <td class="grid-col-kpi">
+    <table class="kpi-table">
+      <tr><td>Machines analysées</td>          <td>{{ host_count }}</td></tr>
+      <tr><td>Services exposés (ports ouverts)</td> <td>{{ open_ports_count }}</td></tr>
+      <tr><td>Ports protégés / fermés</td>     <td>{{ closed_ports_count }}</td></tr>
+      <tr><td>Hôtes à risque critique</td>     <td>{{ critical_hosts_count }} / {{ host_count }}</td></tr>
+      <tr><td>Vulnérabilités critiques</td>    <td>{{ critical_count }}</td></tr>
+      <tr><td>Total points de sécurité</td>    <td>{{ total_vulnerabilities }}</td></tr>
+      <tr><td>Serveurs détectés</td>           <td>{{ server_count }}</td></tr>
+      <tr><td>Postes de travail</td>           <td>{{ workstation_count }}</td></tr>
+      {% if unreachable_count %}<tr><td>Hôtes hors ligne</td><td>{{ unreachable_count }}</td></tr>{% endif %}
+      <tr><td>Taux d'exposition global</td>    <td>{{ exposure_rate }}%</td></tr>
+      <tr><td>Score de discrétion réseau</td>  <td>{{ stealth_score }}%</td></tr>
+      <tr><td>Durée du scan</td>              <td>{{ duration if duration else '—' }}</td></tr>
+    </table>
+    </td>
 
-  </div>
+    <!-- Graphique de répartition -->
+    <td class="grid-col-chart">
+    <div class="chart-wrap">
+      <div class="chart-title">Répartition des risques</div>
+      <div class="sev-row">
+        <span class="sev-lbl" style="color:var(--c-critical)">CRITIQUE</span>
+        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.critical }}%;background:var(--c-critical)"></div>{% if severity_pct.critical > 8 %}<span class="sev-pct">{{ severity_pct.critical }}%</span>{% endif %}</div>
+        <span class="sev-n">{{ severity_totals.critical }}</span>
+      </div>
+      <div class="sev-row">
+        <span class="sev-lbl" style="color:var(--c-high)">ÉLEVÉ</span>
+        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.high }}%;background:var(--c-high)"></div>{% if severity_pct.high > 8 %}<span class="sev-pct">{{ severity_pct.high }}%</span>{% endif %}</div>
+        <span class="sev-n">{{ severity_totals.high }}</span>
+      </div>
+      <div class="sev-row">
+        <span class="sev-lbl" style="color:var(--c-medium)">MODÉRÉ</span>
+        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.medium }}%;background:var(--c-medium)"></div>{% if severity_pct.medium > 8 %}<span class="sev-pct">{{ severity_pct.medium }}%</span>{% endif %}</div>
+        <span class="sev-n">{{ severity_totals.medium }}</span>
+      </div>
+      <div class="sev-row">
+        <span class="sev-lbl" style="color:var(--c-low)">FAIBLE</span>
+        <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.low }}%;background:var(--c-low)"></div>{% if severity_pct.low > 8 %}<span class="sev-pct">{{ severity_pct.low }}%</span>{% endif %}</div>
+        <span class="sev-n">{{ severity_totals.low }}</span>
+      </div>
+    </div>
+    </td>
 
-  <!-- Ligne 2 : graphique de répartition pleine largeur -->
-  <div class="summary-bottom">
-    <div class="chart-title">Niveau des problèmes détectés</div>
-    <div class="sev-row">
-      <span class="sev-lbl" style="color:var(--c-critical)">Critique</span>
-      <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.critical }}%;background:var(--c-critical)"></div></div>
-      <span class="sev-n">{{ severity_totals.critical }}</span>
-    </div>
-    <div class="sev-row">
-      <span class="sev-lbl" style="color:var(--c-high)">Élevé</span>
-      <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.high }}%;background:var(--c-high)"></div></div>
-      <span class="sev-n">{{ severity_totals.high }}</span>
-    </div>
-    <div class="sev-row">
-      <span class="sev-lbl" style="color:var(--c-medium)">Modéré</span>
-      <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.medium }}%;background:var(--c-medium)"></div></div>
-      <span class="sev-n">{{ severity_totals.medium }}</span>
-    </div>
-    <div class="sev-row">
-      <span class="sev-lbl" style="color:var(--c-low)">Faible</span>
-      <div class="sev-bg"><div class="sev-fill" style="width:{{ severity_pct.low }}%;background:var(--c-low)"></div></div>
-      <span class="sev-n">{{ severity_totals.low }}</span>
-    </div>
-  </div>
+  </tr></table>
 
   <p class="summary-text">
-    Audit réalisé le {{ date_scan }} · {{ host_count }} machine(s) · {{ total_ports }} vérifications par machine.
+    {{ open_ports_count }} service(s) exposé(s) · {{ filtered_ports_count }} filtré(s) ·
+    {{ closed_ports_count }} fermé(s) sur {{ host_count }} machine(s)
+    ({{ total_ports }} ports vérifiés par machine · {{ total_possible_ports }} au total).
     {% if critical_count %}
-    <strong>{{ critical_count }} problème(s) critique(s)</strong> détecté(s) sur {{ critical_hosts_count }} machine(s).
+    <strong>{{ critical_count }} vulnérabilité(s) critique(s)</strong> identifiée(s)
+    sur {{ critical_hosts_count }} machine(s).
     {% else %}
-    Aucun problème critique détecté.
+    Aucune vulnérabilité critique détectée.
     {% endif %}
-    {% if duration %}Durée de l'analyse : {{ duration }}.{% endif %}
   </p>
 </div>
 
@@ -1447,100 +1081,93 @@ tr.row-medium   td { background: #fffdf0 !important; }
   <h3>Ce que cela signifie pour vous</h3>
   <p>{{ plain_summary }}</p>
 
-  <!-- Timeline d'urgence -->
-  <div class="urgency-timeline">
-    <div class="urgency-block today">
-      <div class="urgency-block-n">{{ urgency_summary.today }}</div>
-      <div class="urgency-block-lbl">Aujourd'hui</div>
-      <div class="urgency-block-sub">Problème(s) critique(s)</div>
-    </div>
-    <div class="urgency-block h48">
-      <div class="urgency-block-n">{{ urgency_summary['48h'] }}</div>
-      <div class="urgency-block-lbl">Sous 48 heures</div>
-      <div class="urgency-block-sub">Risque(s) élevé(s)</div>
-    </div>
-    <div class="urgency-block w2">
-      <div class="urgency-block-n">{{ urgency_summary['2weeks'] }}</div>
-      <div class="urgency-block-lbl">Sous 2 semaines</div>
-      <div class="urgency-block-sub">Point(s) modéré(s)</div>
-    </div>
-    <div class="urgency-block later">
-      <div class="urgency-block-n">{{ severity_totals.low }}</div>
-      <div class="urgency-block-lbl">Prochaine révision</div>
-      <div class="urgency-block-sub">Point(s) faible(s)</div>
-    </div>
-  </div>
-
-  <div class="risk-dist-pills" style="margin-top:12px">
+  <div class="risk-dist-pills">
     {% if host_risk_distribution.CRITIQUE %}
     <div class="risk-pill critique">
       <div class="pill-dot"></div>
-      {{ host_risk_distribution.CRITIQUE }} machine(s) à risque critique — agir maintenant
+      {{ host_risk_distribution.CRITIQUE }} machine(s) — risque CRITIQUE → intervention immédiate
     </div>
     {% endif %}
     {% if host_risk_distribution.ELEVE %}
     <div class="risk-pill eleve">
       <div class="pill-dot"></div>
-      {{ host_risk_distribution.ELEVE }} machine(s) à risque élevé — agir sous 48 h
+      {{ host_risk_distribution.ELEVE }} machine(s) — risque ÉLEVÉ → intervention sous 48 h
     </div>
     {% endif %}
     {% if host_risk_distribution.MODERE %}
     <div class="risk-pill modere">
       <div class="pill-dot"></div>
-      {{ host_risk_distribution.MODERE }} machine(s) à risque modéré — planifier une correction
+      {{ host_risk_distribution.MODERE }} machine(s) — risque MODÉRÉ → planifier une correction
     </div>
     {% endif %}
     {% if host_risk_distribution.FAIBLE %}
     <div class="risk-pill faible">
       <div class="pill-dot"></div>
-      {{ host_risk_distribution.FAIBLE }} machine(s) à faible risque — surveillance normale
+      {{ host_risk_distribution.FAIBLE }} machine(s) — risque FAIBLE → surveillance normale
     </div>
     {% endif %}
   </div>
 </div>
 
+<!-- ── Timeline d'urgence ─────────────────────────────────────────────────── -->
+{% if urgency_summary and (urgency_summary.today or urgency_summary['48h'] or urgency_summary['2weeks']) %}
+<div class="urgency-timeline">
+  <div class="urgency-card today">
+    <div class="urgency-card-when">Aujourd'hui</div>
+    <div class="urgency-card-n">{{ urgency_summary.today }}</div>
+    <div class="urgency-card-label">point(s) critique(s) à traiter immédiatement</div>
+  </div>
+  <div class="urgency-card h48">
+    <div class="urgency-card-when">Sous 48 h</div>
+    <div class="urgency-card-n">{{ urgency_summary['48h'] }}</div>
+    <div class="urgency-card-label">service(s) à risque élevé à sécuriser</div>
+  </div>
+  <div class="urgency-card w2">
+    <div class="urgency-card-when">Sous 2 semaines</div>
+    <div class="urgency-card-n">{{ urgency_summary['2weeks'] }}</div>
+    <div class="urgency-card-label">point(s) modéré(s) à planifier en maintenance</div>
+  </div>
+</div>
+{% endif %}
+
+{% if next_steps %}
+<div class="next-steps">
+  <div class="next-steps-title">Prochaines étapes recommandées</div>
+  <ol>
+    {% for step in next_steps %}
+    <li>{{ step }}</li>
+    {% endfor %}
+  </ol>
+</div>
+{% endif %}
+
 <!-- ── Plan d'action prioritaire ─────────────────────────────────────────── -->
 {% if action_plan %}
-<h2>Plan d'action — Que faire et quand ?</h2>
-<p style="font-size:9pt;color:var(--ink-600);margin-bottom:10px">
-  Ce tableau liste les actions à mener, du plus urgent au moins urgent.
-  Transmettez-le à votre informaticien pour mise en œuvre.
-</p>
+<h2>Plan d'action prioritaire</h2>
 <table>
   <thead>
     <tr>
-      <th style="width:4%">N°</th>
-      <th style="width:14%">Quand agir ?</th>
-      <th style="width:13%">Machine</th>
-      <th style="width:22%">Service concerné</th>
-      <th style="width:22%">Risque pour votre organisation</th>
-      <th>Ce qu'il faut faire</th>
+      <th style="width:5%">N°</th>
+      <th style="width:10%">Priorité</th>
+      <th style="width:15%">Machine</th>
+      <th style="width:18%">Service / Port</th>
+      <th>Action recommandée</th>
     </tr>
   </thead>
   <tbody>
     {% for a in action_plan %}
-    <tr class="{% if a.severity_class == 'critical' %}row-critical{% elif a.severity_class == 'high' %}row-high{% elif a.severity_class == 'medium' %}row-medium{% endif %}">
+    <tr>
       <td>
         <span class="action-num {{ a.severity_class }}">{{ a.num }}</span>
       </td>
-      <td>
-        <span class="urgency-chip" style="background:{{ a.urgency_color }}20;color:{{ a.urgency_color }};border:1px solid {{ a.urgency_color }}60">
-          {{ a.urgency_label }}
-        </span>
-        <div style="margin-top:4px"><span class="badge {{ a.severity_class }}">{{ a.severity_text }}</span></div>
-      </td>
+      <td><span class="badge {{ a.severity_class }}">{{ a.severity_text }}</span></td>
       <td><strong>{{ a.ip }}</strong></td>
       <td>
-        <strong style="font-size:9pt">{{ a.service_label }}</strong>
+        {{ a.service }}
+        <div style="font-size:7.5pt;color:var(--ink-400)">Port {{ a.port }}</div>
         {% if a.has_exploits %}
-        <div style="font-size:7.5pt;color:var(--c-critical);font-weight:700;margin-top:3px">
-          ⚠ Des outils d'attaque existent pour ce service
-        </div>
+        <div class="exploit-warning">⚠ Exploit public disponible</div>
         {% endif %}
-        <div class="tech-note">Port {{ a.port }}{% if a.cve_refs %} · {{ a.cve_refs | join(', ') }}{% endif %}</div>
-      </td>
-      <td>
-        <span style="font-size:8.5pt;color:var(--ink-900)">{{ a.business_impact }}</span>
       </td>
       <td class="rec">{{ a.action }}</td>
     </tr>
@@ -1549,74 +1176,8 @@ tr.row-medium   td { background: #fffdf0 !important; }
 </table>
 {% endif %}
 
-<!-- ── Guide de remédiation ───────────────────────────────────────────────── -->
-{% if remediation_guide %}
-<h2 class="page-break">Guide de remédiation — Comment corriger les failles</h2>
-<p style="font-size:9pt;color:var(--ink-600);margin-bottom:16px">
-  Pour chaque problème identifié, voici des instructions concrètes adaptées à votre situation.
-  Ces fiches sont classées par priorité. Vous pouvez les transmettre directement à votre prestataire informatique.
-</p>
-
-<div class="rem-section">
-{% for r in remediation_guide %}
-<div class="rem-card">
-
-  <!-- En-tête de la fiche -->
-  <div class="rem-card-header">
-    <span class="rem-port-badge">{{ r.protocol }} {{ r.port }}</span>
-    <span class="rem-title">{{ r.titre }}</span>
-    <span class="badge {{ r.severity_class }}" style="font-size:7.5pt">{{ r.severity_text }}</span>
-    <span class="rem-urgency urg-{{ r.severity_class }}">⏱ {{ r.urgency_label }}</span>
-  </div>
-
-  <!-- Corps de la fiche -->
-  <div class="rem-card-body">
-
-    <!-- Colonne gauche : explication + étapes -->
-    <div class="rem-left">
-      <div class="rem-label">Le problème</div>
-      <div class="rem-text">{{ r.probleme }}</div>
-
-      <div class="rem-danger">⚠ <strong>Pourquoi c'est dangereux :</strong> {{ r.danger }}</div>
-
-      <div class="rem-label">Comment corriger</div>
-      <ol class="rem-steps">
-        {% for step in r.etapes %}
-        <li data-n="{{ loop.index }}">{{ step }}</li>
-        {% endfor %}
-      </ol>
-    </div>
-
-    <!-- Colonne droite : complexité + responsable -->
-    <div class="rem-right">
-      {% set cplx_cls = 'cplx-facile' if r.complexite == 'Facile' else ('cplx-expert' if r.complexite == 'Expert' else 'cplx-moyen') %}
-      <div class="rem-meta-box {{ cplx_cls }}">
-        <div class="rem-meta-label">Complexité</div>
-        <div class="cplx-val" style="font-size:9pt;font-weight:700">{{ r.complexite }}</div>
-      </div>
-      <div class="rem-meta-box" style="background:#f8fafc;border:1px solid var(--ink-200)">
-        <div class="rem-meta-label">Qui s'en charge</div>
-        <div style="font-size:8pt;color:var(--ink-900);line-height:1.4">{{ r.responsable }}</div>
-      </div>
-      {% if r.severity_class == 'critical' %}
-      <div class="rem-meta-box" style="background:#fff1f2;border:1px solid #fca5a5">
-        <div class="rem-meta-label" style="color:#dc2626">Priorité absolue</div>
-        <div style="font-size:8pt;color:#dc2626;font-weight:600">Agir aujourd'hui</div>
-      </div>
-      {% endif %}
-    </div>
-
-  </div>
-</div>
-{% endfor %}
-</div>
-{% endif %}
-
 <!-- ── Statistiques globales ──────────────────────────────────────────────── -->
-<h2 class="page-break">Vue d'ensemble du réseau</h2>
-<p style="font-size:9pt;color:var(--ink-600);margin-bottom:10px">
-  Récapitulatif de ce qui a été analysé et découvert sur votre réseau.
-</p>
+<h2>Statistiques globales</h2>
 
 <table>
   <thead>
@@ -1674,25 +1235,31 @@ tr.row-medium   td { background: #fffdf0 !important; }
 {% endif %}
 
 {% if top_open_ports %}
-<h2>Services les plus répandus sur le réseau</h2>
-<p style="font-size:9pt;color:var(--ink-600);margin-bottom:8px">
-  Ces services ont été détectés sur plusieurs machines. Les plus répandus méritent une attention particulière.
-</p>
-{% set max_count = top_open_ports[0].host_count %}
-<div class="top-ports-grid">
-  {% for tp in top_open_ports %}
-  {% set bar_w = (tp.host_count / max_count * 100) | round | int %}
-  {% set bar_col = '#dc2626' if tp.severity == 'critical' else ('#ea580c' if tp.severity == 'high' else ('#d97706' if tp.severity == 'medium' else '#059669')) %}
-  <div class="tp-row">
-    <span class="tp-service" style="flex:2">{{ tp.service }}</span>
-    <div class="tp-bar-wrap" style="width:60px">
-      <div class="tp-bar-fill" style="width:{{ bar_w }}%;background:{{ bar_col }}"></div>
-    </div>
-    <span class="tp-count">{{ tp.host_count }} machine(s)</span>
-    <span class="badge {{ tp.severity }}" style="font-size:6pt;padding:1px 4px">{{ tp.severity | upper }}</span>
-    <span class="tech-note" style="white-space:nowrap">port {{ tp.port }}</span>
-  </div>
-  {% endfor %}
+<div class="top-ports-section">
+  <div class="top-ports-title">Ports les plus fréquemment ouverts sur le réseau</div>
+  <table class="top-ports-table">
+    <thead>
+      <tr>
+        <th style="width:80px">Port</th>
+        <th>Service</th>
+        <th style="width:90px">Sévérité</th>
+        <th style="width:140px;text-align:right">Présence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in top_open_ports %}
+      <tr>
+        <td class="port-num">{{ p.port }}</td>
+        <td>{{ p.service }}</td>
+        <td><span class="badge {{ p.severity }}">{{ p.severity | upper }}</span></td>
+        <td class="host-count">
+          <span class="host-count-bar" style="width:{{ (p.host_count / host_count * 60) | round | int if host_count else 0 }}px"></span>
+          {{ p.host_count }} / {{ host_count }} machine(s)
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </div>
 {% endif %}
 
@@ -1727,7 +1294,7 @@ tr.row-medium   td { background: #fffdf0 !important; }
           <div class="hc-ip">{{ h.ip }}</div>
           <div class="hc-badges">
             <span class="badge {{ type_badge }}">
-              {% if h.host_type == 'server' %}Serveur{% elif h.host_type == 'workstation' %}Poste{% else %}Inconnu{% endif %}
+              {% if h.host_type == 'server' %}Serveur{% elif h.host_type == 'workstation' %}Poste{% elif h.vendor %}{{ h.vendor }}{% else %}Inconnu{% endif %}
             </span>
             {% if not h.unreachable %}
             <span class="badge {{ risk_badge }}">{{ h.risk }}</span>
@@ -1760,32 +1327,18 @@ tr.row-medium   td { background: #fffdf0 !important; }
   {% set type_cls = 'type-server' if host.host_type == 'server' else ('type-workstation' if host.host_type == 'workstation' else ('type-unreachable' if host.unreachable else 'type-unknown')) %}
   <div class="host-header {{ type_cls }}">
     <div>
-      <div class="host-ip">{{ host.ip }}</div>
-      {% if host.mac and host.mac != 'N/A' %}
-      <div style="font-size:7.5pt;font-family:monospace;opacity:0.65;margin-top:2px;letter-spacing:0.5px">{{ host.mac }}</div>
-      {% endif %}
+      <div class="host-ip">{{ host.ip }}{% if host.mac and host.mac != 'N/A' %} <span style="font-size:8pt;font-weight:400;opacity:0.6;font-family:monospace;letter-spacing:0.5px">{{ host.mac }}</span>{% endif %}</div>
       {% if host.os %}<div class="host-os">{{ host.os }}</div>{% endif %}
       <div class="host-type-label">
-        {% if host.host_type == 'server' %}Serveur{% elif host.host_type == 'workstation' %}Poste de travail{% elif host.unreachable %}Machine hors ligne{% else %}Type inconnu{% endif %}
+        {% if host.host_type == 'server' %}Serveur{% elif host.host_type == 'workstation' %}Poste de travail{% elif host.unreachable %}Machine hors ligne{% elif host.vendor %}{{ host.vendor }}{% else %}Type inconnu{% endif %}
       </div>
     </div>
-    <div class="host-right" style="display:flex;align-items:center;gap:12px">
+    <div class="host-right">
       {% if not host.unreachable %}
-      {% set hgc = '#dc2626' if host.risk == 'CRITIQUE' else ('#ea580c' if host.risk == 'ELEVE' else ('#d97706' if host.risk == 'MODERE' else '#059669')) %}
-      {% set hdash = (host.risk_score * 1.257) | round(1) %}
-      <div style="text-align:center">
-        <!-- Mini-jauge SVG — compatible WeasyPrint -->
-        <svg width="56" height="56" viewBox="0 0 56 56">
-          <circle cx="28" cy="28" r="20" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.2)" stroke-width="8"/>
-          <circle cx="28" cy="28" r="20" fill="none" stroke="{{ hgc }}" stroke-width="8"
-                  stroke-dasharray="{{ hdash }} 125.7"
-                  stroke-linecap="round"
-                  transform="rotate(-90 28 28)"/>
-          <text x="28" y="25" text-anchor="middle" font-size="10" font-weight="bold" fill="#ffffff">{{ host.risk_score }}</text>
-          <text x="28" y="36" text-anchor="middle" font-size="6" fill="rgba(255,255,255,0.7)">/100</text>
-        </svg>
-        <div style="font-size:7pt;color:rgba(255,255,255,0.8);letter-spacing:1px;text-transform:uppercase">{{ host.risk }}</div>
-      </div>
+      <span class="badge {% if host.risk == 'CRITIQUE' %}critical{% elif host.risk == 'ELEVE' %}high{% elif host.risk == 'MODERE' %}medium{% else %}low{% endif %}"
+            style="font-size:9pt;padding:4px 10px">
+        {{ host.risk }} — {{ host.risk_score }}/100
+      </span>
       {% else %}
       <span class="badge unreachable" style="font-size:9pt;padding:4px 10px">HORS LIGNE</span>
       {% endif %}
@@ -1794,100 +1347,106 @@ tr.row-medium   td { background: #fffdf0 !important; }
 
   {% if host.unreachable %}
   <div class="unreachable-notice">
-    Cette machine a été détectée sur le réseau mais n'a pas répondu à l'analyse.
-    Elle était probablement hors tension ou isolée par un pare-feu au moment de l'audit.
-    Aucune donnée de sécurité n'est disponible pour cette machine.
+    Cette machine a été détectée sur le réseau (via ARP ou ping) mais n'a pas répondu
+    au scan de ports TCP. Elle est probablement protégée par un pare-feu ou était hors ligne
+    au moment de l'audit.
   </div>
   {% else %}
 
-  <!-- Stats simplifiées -->
   <div class="host-stats">
     <div class="stat-card">
-      <div class="stat-val" {% if host.critical_count %}style="color:var(--c-critical)"{% endif %}>{{ host.critical_count }}</div>
-      <div class="stat-label">Problème(s) critique(s)</div>
-    </div>
-    <div class="stat-card">
       <div class="stat-val">{{ host.open_ports_count }}</div>
-      <div class="stat-label">Service(s) accessible(s)</div>
+      <div class="stat-label">Services exposés</div>
     </div>
     <div class="stat-card">
       <div class="stat-val">{{ host.filtered_ports_count }}</div>
-      <div class="stat-label">Service(s) partiellement<br>bloqué(s)</div>
+      <div class="stat-label">Ports filtrés</div>
     </div>
     <div class="stat-card">
-      <div class="stat-val" style="color:var(--c-low)">{{ host.closed_ports_count }}</div>
-      <div class="stat-label">Port(s) correctement<br>fermé(s)</div>
+      <div class="stat-val">{{ host.closed_ports_count }}</div>
+      <div class="stat-label">Ports fermés</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val" style="color:var(--c-critical)">{{ host.critical_count }}</div>
+      <div class="stat-label">Critiques</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val">{{ host.exposure_rate }}%</div>
+      <div class="stat-label">Taux d'exposition</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val">{{ host.vulnerability_density }}</div>
+      <div class="stat-label">Risques / service</div>
     </div>
   </div>
+
+  {% if host.service_inventory %}
+  <div class="pills">
+    <strong style="font-size:8.5pt">Services détectés :</strong>
+    {% for svc, cnt in host.service_inventory.items() %}
+    <span class="pill">{{ svc }}{% if cnt > 1 %} ×{{ cnt }}{% endif %}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   {% if host.vulnerabilities %}
   <table>
     <thead>
       <tr>
-        <th style="width:22%">Service identifié</th>
-        <th style="width:12%">Niveau de risque</th>
-        <th style="width:14%">Quand agir ?</th>
-        <th style="width:24%">Risque pour votre organisation</th>
-        <th>Ce qu'il faut faire</th>
+        <th style="width:7%">Port</th>
+        <th style="width:6%">Proto</th>
+        <th style="width:8%">État</th>
+        <th style="width:17%">Service</th>
+        <th style="width:10%">Risque</th>
+        <th style="width:22%">Menaces connues</th>
+        <th style="width:30%">Action recommandée</th>
       </tr>
     </thead>
     <tbody>
       {% for v in host.vulnerabilities %}
-      <tr class="{% if v.severity_class == 'critical' %}row-critical{% elif v.severity_class == 'high' %}row-high{% elif v.severity_class == 'medium' %}row-medium{% endif %}">
-
-        <!-- Colonne 1 : nom lisible du service -->
+      <tr class="row-{{ v.severity_class }}">
+        <td><strong>{{ v.port }}</strong></td>
+        <td>{{ v.protocol }}</td>
         <td>
-          <strong style="font-size:9pt">{{ v.service_label }}</strong>
-          {% if v.state == 'filtered' %}
-          <div style="font-size:7.5pt;color:var(--ink-400);margin-top:2px">
-            (partiellement bloqué par un pare-feu)
-          </div>
-          {% endif %}
-          {% if v.exploit_count %}
-          <div style="font-size:7.5pt;color:var(--c-critical);font-weight:700;margin-top:3px">
-            ⚠ Des outils d'attaque publics existent
-          </div>
-          {% endif %}
-          <!-- Détails techniques en note grise -->
-          <div class="tech-note">
-            Port {{ v.port }}/{{ v.protocol }}
-            {% if v.product %}· {{ v.product }}{% if v.version %} {{ v.version }}{% endif %}{% endif %}
-            {% if v.cve_list %}· {{ v.cve_list | length }} faille(s) référencée(s)
-              ({% for c in v.cve_list[:2] %}{{ c.cve_id }}{% if not loop.last %}, {% endif %}{% endfor %}{% if v.cve_list|length > 2 %}…{% endif %})
-            {% endif %}
-          </div>
-        </td>
-
-        <!-- Colonne 2 : niveau de risque -->
-        <td>
-          <span class="badge {{ v.severity_class }}">{{ v.severity_text }}</span>
-          {% if v.max_cvss %}
-          <div class="tech-note" style="margin-top:3px">Score {{ "%.1f"|format(v.max_cvss) }}/10</div>
-          {% endif %}
-        </td>
-
-        <!-- Colonne 3 : urgence -->
-        <td>
-          <span class="urgency-chip" style="background:{{ v.urgency_color }}20;color:{{ v.urgency_color }};border:1px solid {{ v.urgency_color }}60">
-            {{ v.urgency_label }}
+          <span class="badge {{ 'open' if v.state == 'open' else 'filtered' }}">
+            {{ 'ouvert' if v.state == 'open' else 'filtré' }}
           </span>
         </td>
-
-        <!-- Colonne 4 : impact métier -->
         <td>
-          <span style="font-size:8.5pt;color:var(--ink-900)">{{ v.business_impact }}</span>
+          {{ v.service }}
+          {% if v.product or v.version %}
+          <div style="font-size:7.5pt;color:var(--ink-600);margin-top:1px">
+            {{ v.product }}{% if v.product and v.version %} {% endif %}{{ v.version }}
+          </div>
+          {% endif %}
         </td>
-
-        <!-- Colonne 5 : recommandation -->
+        <td>
+          <span class="badge {{ v.severity_class }}">{{ v.severity_text }}</span>
+          {% if v.exploit_count %}
+          <div style="font-size:7pt;color:var(--c-critical);margin-top:2px">
+            {{ v.exploit_count }} exploit(s) public(s)
+          </div>
+          {% endif %}
+        </td>
+        <td>
+          {% if v.exploits %}
+          <div class="exploit-list">
+            {% for e in v.exploits %}
+            <div>· {{ e[:65] }}{% if e|length > 65 %}…{% endif %}</div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="no-exploit">Aucun exploit répertorié</div>
+          {% endif %}
+        </td>
         <td class="rec">{{ v.recommendation }}</td>
-
       </tr>
       {% endfor %}
     </tbody>
   </table>
   {% else %}
   <p style="color:var(--ink-600);font-style:italic;font-size:9pt">
-    Aucun service actif détecté sur cette machine lors de l'audit.
+    Aucun service détecté sur cette machine.
   </p>
   {% endif %}
 
@@ -1896,122 +1455,73 @@ tr.row-medium   td { background: #fffdf0 !important; }
 </div>
 {% endfor %}
 
-<!-- ── Prochaines étapes ──────────────────────────────────────────────────── -->
-<div class="page-break">
-  <h2>Prochaines étapes — Ce que vous devez faire</h2>
-  <p style="font-size:9.5pt;color:var(--ink-600);margin-bottom:12px">
-    Voici les actions concrètes à entreprendre pour améliorer la sécurité de votre réseau.
-    Transmettez ce document à votre prestataire informatique pour mise en œuvre.
-  </p>
-  <ul class="next-steps-list">
-    {% for step in next_steps %}
-    <li>
-      <span class="next-steps-num">{{ loop.index }}</span>
-      {{ step }}
-    </li>
-    {% endfor %}
-  </ul>
-</div>
+<!-- ── Guide de remédiation ───────────────────────────────────────────────── -->
+{% if remediation_guide %}
+<h2 class="page-break">Guide de remédiation</h2>
+<p style="font-size:9pt;color:var(--ink-600);margin-bottom:16px;line-height:1.6">
+  Instructions concrètes pour corriger les points identifiés.
+  Pour chaque service à risque, les étapes ci-dessous indiquent
+  <strong>quoi faire, qui doit s'en occuper et avec quel niveau de complexité.</strong>
+</p>
 
-<!-- ── Méthodologie ───────────────────────────────────────────────────────── -->
-<div class="page-break">
-  <h2>Comment cet audit a été réalisé</h2>
-
-  <p style="font-size:9pt;color:var(--ink-600);margin-bottom:14px">
-    Cet audit est une photographie de l'état de sécurité de votre réseau à un instant donné.
-    Il a été réalisé de façon non intrusive : aucune donnée n'a été modifiée, aucun accès
-    non autorisé n'a été tenté. Toutes les conclusions s'appuient sur des bases de données
-    officielles de failles de sécurité.
-  </p>
-
-  <div class="methodology-grid">
-    <div class="meth-card">
-      <div class="meth-card-title">Phase 1 — Découverte</div>
-      <p>
-        Diffusion ARP sur le réseau local pour identifier les machines actives.
-        Fallback ping sweep nmap (-sn) pour les réseaux &gt; /24.
-        Collecte des adresses MAC pour identifier les fabricants.
-      </p>
+<div class="remediation-section">
+  {% for r in remediation_guide %}
+  <div class="remediation-card {{ r.severity_class }}">
+    <div class="remediation-head">
+      <div>
+        <span class="remediation-titre">{{ r.titre }}</span>
+        <span class="remediation-port">{{ r.protocol }}/{{ r.port }}</span>
+      </div>
+      <span class="remediation-urgency {{ r.severity_class }}">{{ r.urgency_label }}</span>
     </div>
-    <div class="meth-card">
-      <div class="meth-card-title">Phase 2 — Scan de ports</div>
-      <p>
-        Scan TCP SYN (nmap -sS) sur {{ total_ports }} port(s) par machine.
-        {% if scan_profile %}Profil utilisé : <strong>{{ scan_profile }}</strong>.{% endif %}
-        Détection de version (-sV) et d'OS (-O) activée en mode complet.
-        Exécution parallèle sur plusieurs hôtes simultanément.
-      </p>
+
+    <div class="remediation-problem"><strong>Problème :</strong> {{ r.probleme }}</div>
+    <div class="remediation-danger"><strong>⚠ Risque :</strong> {{ r.danger }}</div>
+
+    <div style="font-size:8.5pt;font-weight:700;color:var(--ink-700);margin-top:10px">
+      Étapes de correction :
     </div>
-    <div class="meth-card">
-      <div class="meth-card-title">Phase 3 — Enrichissement</div>
-      <p>
-        Corrélation avec la base NVD (NIST) via l'API CVE v2.
-        Scripts nmap vuln/vulners pour l'extraction directe des CVE.
-        Recherche d'exploits publics via Exploit-DB (searchsploit).
-        {% if total_cves %}{{ total_cves }} CVE(s) distincte(s) identifiée(s).{% endif %}
-      </p>
+    <ol class="remediation-steps">
+      {% for etape in r.etapes %}
+      <li>{{ etape }}</li>
+      {% endfor %}
+    </ol>
+
+    <div class="remediation-meta">
+      <span><strong>Complexité :</strong> {{ r.complexite }}</span>
+      <span><strong>Responsable :</strong> {{ r.responsable }}</span>
     </div>
   </div>
-
-  <table style="margin-top:14px">
-    <thead>
-      <tr>
-        <th style="width:20%">Source</th>
-        <th style="width:20%">Confiance</th>
-        <th>Description</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><span class="conf-badge conf-confirmed">Confirmée · NVD</span></td>
-        <td>Très élevée</td>
-        <td>Score CVSS issu de l'API NVD avec correspondance produit + version exacte.</td>
-      </tr>
-      <tr>
-        <td><span class="conf-badge conf-probable">Probable · nmap</span></td>
-        <td>Élevée</td>
-        <td>Score CVSS extrait des scripts nmap vuln/vulners, ou NVD sans version exacte.</td>
-      </tr>
-      <tr>
-        <td><span class="conf-badge conf-potential">Potentielle · searchsploit</span></td>
-        <td>Modérée</td>
-        <td>Correspondance textuelle dans Exploit-DB uniquement. À vérifier manuellement.</td>
-      </tr>
-      <tr>
-        <td><span class="conf-badge conf-heuristic">Heuristique · port</span></td>
-        <td>Indicative</td>
-        <td>Classification basée sur le numéro de port ou le nom du service, sans base CVE.</td>
-      </tr>
-    </tbody>
-  </table>
+  {% endfor %}
 </div>
+{% endif %}
 
 <!-- ── Glossaire ──────────────────────────────────────────────────────────── -->
 <div class="page-break glossaire">
-  <h2>Glossaire — Explication des termes utilisés</h2>
+  <h2>Glossaire</h2>
   <table>
     <thead>
-      <tr><th style="width:180px">Terme</th><th>Ce que cela veut dire concrètement</th></tr>
+      <tr><th style="width:160px">Terme</th><th>Définition</th></tr>
     </thead>
     <tbody>
-      <tr><td>Service accessible (port ouvert)</td><td>Une "porte" de votre machine est ouverte et répond aux connexions depuis le réseau. C'est utile si c'est voulu (votre site web, par exemple), mais dangereux si c'est inutile ou mal configuré.</td></tr>
-      <tr><td>Service partiellement bloqué (port filtré)</td><td>Un équipement de protection (pare-feu) bloque les connexions à cette porte, mais le service peut quand même être actif derrière. Moins exposé qu'un port ouvert, mais pas totalement sécurisé.</td></tr>
-      <tr><td>Port fermé</td><td>Cette "porte" est verrouillée. Aucun service ne tourne derrière et personne ne peut y accéder. C'est l'état idéal pour tout ce qui n'est pas indispensable.</td></tr>
-      <tr><td>Risque critique</td><td>Une faille qui permettrait à un pirate de prendre le contrôle total d'une machine, de voler vos données ou de bloquer votre activité. À traiter aujourd'hui.</td></tr>
-      <tr><td>Risque élevé</td><td>Une faille sérieuse qui pourrait permettre l'accès à des informations confidentielles ou perturber un service. À corriger sous 48 heures.</td></tr>
-      <tr><td>Risque modéré</td><td>Un point de vigilance qui faciliterait une attaque si d'autres failles s'y ajoutaient. À corriger dans les deux semaines.</td></tr>
-      <tr><td>Outils d'attaque publics disponibles</td><td>Des programmes permettant d'exploiter cette faille existent sur Internet et sont accessibles à n'importe qui. Cela rend l'attaque beaucoup plus probable et facile.</td></tr>
-      <tr><td>Serveur</td><td>Une machine qui fournit des services à d'autres (votre site web, votre messagerie, votre base de données…). Généralement plus critique à sécuriser.</td></tr>
-      <tr><td>Poste de travail</td><td>L'ordinateur de bureau ou portable d'un employé. Moins exposé qu'un serveur, mais reste une cible pour les attaques.</td></tr>
-      <tr><td>Passerelle (routeur)</td><td>L'équipement qui fait le lien entre votre réseau interne et Internet (votre box ou routeur). Pièce maîtresse de la sécurité réseau.</td></tr>
-      <tr><td>Faille de sécurité référencée</td><td>Une vulnérabilité officiellement reconnue et enregistrée dans une base de données internationale. Sa présence est confirmée par des experts en sécurité.</td></tr>
-      <tr><td>Audit de sécurité</td><td>Une analyse complète de votre réseau visant à identifier les points faibles avant qu'une personne malveillante ne les découvre.</td></tr>
+      <tr><td>Port ouvert</td><td>Un service actif sur la machine répond à ce port. Il est accessible depuis le réseau et potentiellement exploitable.</td></tr>
+      <tr><td>Port filtré</td><td>Un pare-feu bloque les connexions à ce port. Le service peut être actif mais masqué.</td></tr>
+      <tr><td>Port fermé</td><td>Aucun service ne tourne sur ce port. Le port est inaccessible.</td></tr>
+      <tr><td>Vulnérabilité critique</td><td>Faille permettant potentiellement à un attaquant de prendre le contrôle de la machine. Nécessite une action immédiate.</td></tr>
+      <tr><td>Vulnérabilité élevée</td><td>Faille sérieuse pouvant compromettre la confidentialité ou l'intégrité des données. Correction urgente recommandée.</td></tr>
+      <tr><td>Exploit public</td><td>Un programme permettant d'attaquer cette vulnérabilité est disponible publiquement, augmentant le risque d'attaque.</td></tr>
+      <tr><td>Taux d'exposition</td><td>Pourcentage des ports vérifiés qui sont ouverts ou filtrés. Un taux faible indique une meilleure maîtrise de la surface d'attaque.</td></tr>
+      <tr><td>Serveur</td><td>Machine fournissant des services réseau (web, base de données, messagerie…). Généralement plus exposée.</td></tr>
+      <tr><td>Poste de travail</td><td>Machine utilisée par un employé pour ses tâches quotidiennes (PC, laptop…).</td></tr>
+      <tr><td>Passerelle</td><td>Équipement qui relie plusieurs réseaux (routeur, box Internet…). Critique pour la sécurité du réseau.</td></tr>
+      <tr><td>ARP</td><td>Protocole de découverte réseau utilisé pour lister les machines actives sur un réseau local.</td></tr>
+      <tr><td>Scan de ports</td><td>Technique permettant d'identifier les services actifs sur une machine en testant chaque port réseau.</td></tr>
     </tbody>
   </table>
 </div>
 
 <div class="doc-footer">
-  CONFIDENTIEL — Document à usage interne uniquement. Ne pas diffuser en dehors de votre organisation.<br>
+  CONFIDENTIEL — Document à usage interne uniquement. Contient des informations sensibles sur la posture de sécurité du système.<br>
   Généré par ReconEngine · {{ date_scan }} · Référence {{ scan_id }}
 </div>
 

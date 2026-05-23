@@ -20,6 +20,7 @@ Run:
   sudo uvicorn tools.api:app --host 0.0.0.0 --port 8000
 """
 import contextlib
+import copy
 import datetime
 import hmac
 import logging
@@ -97,21 +98,38 @@ AuthDep = Annotated[None, Depends(_require_api_key)]
 
 # ── Application ────────────────────────────────────────────────────────────────
 
+# Config chargée une seule fois au lifespan startup. Accédée via _get_config()
+# par les endpoints — évite de re-parser TOML + env vars à chaque requête.
+_config: cfg_mod.Config | None = None
+
+
+def _get_config() -> cfg_mod.Config:
+    """Retourne la config chargée au startup. Lève si appelée avant init."""
+    if _config is None:
+        raise RuntimeError("Config not initialized — lifespan startup did not run")
+    return _config
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(application: FastAPI):  # noqa: ARG001
-    """Initialize DB on startup; mark orphaned running scans as error."""
+    """Initialize config + DB on startup; mark orphaned scans (running/pending) as error."""
+    global _config
+    _config = cfg_mod.Config.load()
+    log.info("Config loaded (profile=%s, output_dir=%s)", _config.scan.profile, _config.output_dir)
+
     _db_init()
     try:
         with _db_connect() as conn:
             orphans = conn.execute(
-                "SELECT scan_id FROM scans WHERE status = ?", (ScanStatus.RUNNING,)
+                "SELECT scan_id FROM scans WHERE status IN (?, ?)",
+                (ScanStatus.RUNNING, ScanStatus.PENDING),
             ).fetchall()
         for row in orphans:
             _db_update(
                 row["scan_id"],
                 status=ScanStatus.ERROR,
                 finished_at=datetime.datetime.now(datetime.UTC).isoformat(),
-                error="Process restarted while scan was running",
+                error="Process restarted before scan completed",
             )
             log.warning("Marked orphaned scan %s as error", row["scan_id"])
     except Exception as exc:
@@ -325,13 +343,11 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
     log.info("[%s] Scan started (profile=%s)", scan_id, req.profile)
 
     try:
-        cfg = cfg_mod.Config.load()
+        # Deep copy : la config est partagée entre requêtes, on ne mute que la copie locale
+        cfg = copy.deepcopy(_get_config())
         cfg.scan.profile = req.profile
         if req.ports:
             cfg.scan.ports = req.ports
-        elif profile_ports := cfg_mod.SCAN_PROFILES[req.profile].get("ports"):
-            # Use the profile's built-in port list if the caller didn't specify one
-            cfg.scan.ports = profile_ports
 
         # ── Phase 1: Discovery ─────────────────────────────────────────────────
         led_status.set_state(led_status.State.DISCOVERING)
@@ -407,26 +423,9 @@ def _run_scan(scan_id: str, req: ScanRequest) -> None:
                 log.error("[%s] PDF generation failed: %s", scan_id, exc)
 
         # Final LED state — critique si ≥1 port critique ouvert, sinon OK
-        _any_critical = False
-        for _data in scan_results.values():
-            try:
-                for _proto in _data.all_protocols():
-                    for _port in _data[_proto]:
-                        _pi = _data[_proto][_port]
-                        if _pi.get("state") != "open":
-                            continue
-                        if (_port in rapport.CRITICAL_PORTS
-                                or (_pi.get("name") or "").lower() in rapport.HIGH_RISK_SERVICES):
-                            _any_critical = True
-                            break
-                    if _any_critical:
-                        break
-            except Exception:
-                continue
-            if _any_critical:
-                break
         led_status.set_state(
-            led_status.State.DONE_CRITICAL if _any_critical else led_status.State.DONE_OK
+            led_status.State.DONE_CRITICAL if rapport.has_critical_exposure(scan_results)
+            else led_status.State.DONE_OK
         )
 
         _persist(
@@ -571,8 +570,7 @@ def list_scans(_auth: AuthDep) -> list[ScanSummary]:
     response_model=list[ReportEntry],
 )
 def list_reports(_auth: AuthDep) -> list[ReportEntry]:
-    cfg = cfg_mod.Config.load()
-    report_dir = pathlib.Path(cfg.output_dir)
+    report_dir = pathlib.Path(_get_config().output_dir)
     if not report_dir.exists():
         return []
     pdfs = sorted(report_dir.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -596,8 +594,7 @@ def download_report(_auth: AuthDep, filename: str) -> FileResponse:
     # Première passe : rejeter les caractères manifestement dangereux
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
-    cfg = cfg_mod.Config.load()
-    output_dir = pathlib.Path(cfg.output_dir).resolve()
+    output_dir = pathlib.Path(_get_config().output_dir).resolve()
     path = (output_dir / filename).resolve()
     # Vérification canonique : le chemin résolu doit rester sous output_dir
     if not str(path).startswith(str(output_dir) + os.sep) and path != output_dir:

@@ -197,9 +197,12 @@ def _extract_nvd_cvss(vuln_entry: dict) -> float:
 def _nvd_fetch(keyword: str) -> list[dict]:
     """Appelle l'API NVD et retourne la liste brute de vulnérabilités."""
     _nvd_throttle()
+    # 40 résultats par requête : suffisant pour récupérer les CVE critiques/élevés
+    # des produits populaires (Apache, OpenSSL, nginx ont des dizaines de CVE
+    # historiques — 15 était trop court pour les versions courantes).
     params = urllib.parse.urlencode({
         "keywordSearch":  keyword,
-        "resultsPerPage": 15,
+        "resultsPerPage": 40,
         "noRejected":     "",
     })
     headers = {"apiKey": _NVD_API_KEY} if _NVD_API_KEY else {}

@@ -202,3 +202,35 @@ def test_port_count_mixed():
 def test_port_count_empty_returns_one():
     from main import _port_count
     assert _port_count("") == 1
+
+
+# ── software_query : éviter les faux positifs searchsploit ────────────────────
+
+def test_software_query_with_product_and_version():
+    from rapport import software_query
+    assert software_query({"product": "OpenSSH", "version": "8.2p1", "name": "ssh"}) == "OpenSSH 8.2p1"
+
+
+def test_software_query_empty_when_no_product():
+    """Service sans product → pas de recherche (faux positifs sur 'http'/'ssh')."""
+    from rapport import software_query
+    assert software_query({"product": "", "version": "", "name": "http"}) == ""
+    assert software_query({"product": "", "version": "", "name": "ssh"}) == ""
+    assert software_query({"product": "", "version": "", "name": ""}) == ""
+
+
+def test_software_query_empty_when_product_but_no_version():
+    """Product sans version → pas de recherche : searchsploit 'nginx' retourne ~80
+    résultats sur tout l'historique des CVE, écrasante majorité sur versions
+    qui ne sont pas la nôtre."""
+    from rapport import software_query
+    assert software_query({"product": "nginx", "version": "", "name": "http"}) == ""
+    assert software_query({"product": "Apache httpd", "version": "", "name": "http"}) == ""
+    assert software_query({"product": "OpenSSH", "version": "", "name": "ssh"}) == ""
+
+
+def test_software_query_ignores_service_name_fallback():
+    """Même avec un name, on retourne vide si pas de product (anti faux-positifs)."""
+    from rapport import software_query
+    assert software_query({"name": "ftp"}) == ""
+    assert software_query({"name": "telnet"}) == ""

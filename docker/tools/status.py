@@ -29,6 +29,7 @@ Variables d'environnement :
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
@@ -144,17 +145,13 @@ class _GPIO:
         line = self._lines.get(offset)
         if line is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             line.set_value(1 if on else 0)
-        except Exception:
-            pass
 
     def close(self) -> None:
         for line in self._lines.values():
-            try:
+            with contextlib.suppress(Exception):
                 line.release()
-            except Exception:
-                pass
         self._lines.clear()
         self._available = False
 
@@ -197,19 +194,15 @@ class _Neo:
     def show(self, color_left: tuple[int, int, int], color_right: tuple[int, int, int]) -> None:
         if not self._available or self._dev is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             self._dev.writebytes2(_encode_pixels([color_left, color_right]))
-        except Exception:
-            pass
 
     def close(self) -> None:
         if self._dev is not None:
-            try:
+            with contextlib.suppress(Exception):
                 # éteindre avant de fermer
                 self._dev.writebytes2(_encode_pixels([(0, 0, 0), (0, 0, 0)]))
                 self._dev.close()
-            except Exception:
-                pass
         self._dev = None
         self._available = False
 

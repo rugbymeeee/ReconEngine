@@ -109,7 +109,7 @@ port USB-A externe (USB2 — export des rapports, stockage USB additionnel).
 ## 6. Gestion de l'alimentation
 
 Chaîne complète : **USB-C 5 V → TP4056 (charge Li-Ion) → Cellule 18650 →
-DW01A + double MOSFET (protection) → MT3608 (boost 3,7 V → 5 V) →
+DW01A + MOSFET (protection) → MT3608 (boost 3,7 V → 5 V) →
 Orange Pi Zero 3 (5 V) → AMS1117-3.3 (3,3 V auxiliaire)**
 
 ### U5 — TP4056 (charge Li-Ion via USB-C)
@@ -121,16 +121,16 @@ Orange Pi Zero 3 (5 V) → AMS1117-3.3 (3,3 V auxiliaire)**
 | Tension batterie | 4,2 V (Li-Ion 1S) |
 | Entrée | 5 V via USB1 (Type-C) |
 
-### U8 + Q1/Q2 — Protection de cellule (DW01A + double N-MOSFET)
+### U8 + Q2 — Protection de cellule (DW01A + double N-MOSFET)
 | Composant | Réf. | LCSC | Rôle |
 |---|---|---|---|
 | U8 — DW01A | PUOLOP (迪浦) | C351410 | Contrôleur de protection (over-charge, over-discharge, court-circuit) |
-| Q1 — PJM8205DNSG | PJSEMI | C2917199 | Double N-MOSFET côté décharge |
-| Q2 — FS8205A | TECH PUBLIC | C2830320 | Double N-MOSFET côté charge |
+| Q2 — FS8205A | TECH PUBLIC | C2830320 | Double N-MOSFET (charge + décharge intégrés) |
 
-> Q1 et Q2 sont des doubles N-MOSFET en SOT-23-6 (paire commutée par DW01A
-> pour couper indépendamment charge et décharge). Pas de fuel gauge — le
-> niveau de batterie n'est pas exposé au logiciel.
+> Le FS8205A est un double N-MOSFET en SOT-23-6 contenant deux transistors
+> dans un seul boîtier — l'un coupe la charge, l'autre la décharge,
+> tous deux commandés par le DW01A. Pas de fuel gauge — le niveau de
+> batterie n'est pas exposé au logiciel.
 
 ### U6 — MT3608 (boost 3,7 V → 5 V)
 | Spec | Valeur |
@@ -160,7 +160,7 @@ Recommandé : **Samsung INR18650-25R (2 500 mAh, 3,7 V, 20 A max décharge,
 |------|--------|
 | Référence | MF-MSMF200L-2 (BOURNS) — LCSC C89650 |
 | Boîtier | F1812 |
-| Courant de hold / trip | 2 A / ~3,5 A |
+| Courant de hold / trip | 2,0 A / 4,0 A |
 
 > 2 fusibles PTC ré-armables sur les rails 5 V critiques (entrée USB-C
 > et sortie batterie). Évitent toute surconsommation accidentelle d'un
@@ -206,6 +206,20 @@ via `RECONENGINE_LED_YELLOW_GPIO` / `RECONENGINE_LED_GREEN_GPIO` (défauts :
 > pip install reconengine[hardware]
 > ```
 
+### Évolution future — écran + boutons (non présents dans cette BOM)
+
+Cette BOM **ne contient pas encore** d'écran ni de boutons physiques.
+L'interaction utilisateur passe pour l'instant par :
+- L'API HTTP (port 8000) en accès réseau,
+- Le shell SSH via `wlan0` ou Ethernet,
+- Les LED1–LED4 pour l'état (sans contrôle).
+
+Un futur révision PCB pourra ajouter un écran I²C (SSD1306 OLED ou ST7735
+TFT) et 3–4 boutons-poussoirs sur GPIO libres pour piloter directement
+les profils `quick` / `full` sans réseau. Le module `status.py` devra
+alors être étendu (ou un nouveau module `ui.py` créé) pour gérer
+l'affichage et le polling des boutons.
+
 ---
 
 ## 8. Passifs et résistances
@@ -213,12 +227,14 @@ via `RECONENGINE_LED_YELLOW_GPIO` / `RECONENGINE_LED_GREEN_GPIO` (défauts :
 | Designator | Valeur | Rôle |
 |---|---|---|
 | C1, C2 | 12 pF (0603) | Découplage / oscillateur |
-| L1 | 4,7 µH (0603) | Inductance du boost MT3608 |
+| C3, C4, C5, C6 | 100 nF (0603) | Découplage local (rails 3,3 V / 5 V / SoC) |
+| L1 | 4,7 µH (0603) | Inductance du boost MT3608 (3,7 V → 5 V) |
+| L2 | 10 µH (0603) | Filtrage rail 3,3 V (entrée AMS1117) |
 | R1 | 2 kΩ (0603) | Polarisation |
 | R2, R3 | 1 kΩ (0603) | Pull-up / limitation LED |
 | R4 | 10 kΩ (0603) | Pull-up générique |
 | R5 | 68 kΩ (0603) | Programmation courant charge TP4056 (~1 A) |
-| R6, R7, R10, R11, R12 | 10 kΩ (0603) | Pull-ups / pull-downs |
+| R6, R7, R10, R11, R12, R14, R15 | 10 kΩ (0603) | Pull-ups / pull-downs |
 | R8, R9 | 5,1 kΩ (0603) | Détection rôle USB-C (CC1/CC2) |
 | R13 | 12 kΩ (0603) | Diviseur de tension |
 

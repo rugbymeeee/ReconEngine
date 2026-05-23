@@ -40,6 +40,8 @@ DEFAULT_PORTS = ",".join(map(str, sorted([
     53, 161, 162,
     # Windows / SMB / RPC
     111, 135, 137, 139, 445,
+    # WinRM (PowerShell remoting)
+    5985, 5986,
     # Anciens services Unix
     512, 513, 514, 873,
     # Annuaires
@@ -50,8 +52,10 @@ DEFAULT_PORTS = ",".join(map(str, sorted([
     1433, 1521, 3306, 5432, 6379, 9200, 9300, 11211, 27017, 27018,
     # Accès distants
     2222, 3389, 5900, 5901, 5902,
-    # Docker / conteneurs
-    2375, 2376, 2377,
+    # Docker / conteneurs / Kubernetes
+    2375, 2376, 2377, 6443, 10250,
+    # Service mesh / secrets (Consul, Vault)
+    8200, 8500,
     # NFS
     2049,
     # Services divers à risque
@@ -71,40 +75,19 @@ SCAN_PROFILES: dict[str, dict] = {
     "quick": {
         "description": "Scan rapide — détection des ports ouverts, sans scripts",
         # -Pn              : hôtes déjà confirmés actifs (discover.py)
-        # --max-retries 1  : nmap défaut = 2 re-sondes ; 1 suffit sur LAN fiable
+        # --max-retries 1  : nmap défaut = 2 re-sondes ; 1 suffit sur Ethernet fiable
         # --host-timeout   : libère le thread si un hôte ne répond plus
         # --min-parallelism: force le parallélisme de sondage nmap
         "arguments": "-sS -T4 --min-rate 2000 -n --open -Pn --max-retries 1 --host-timeout 60s --min-parallelism 20",
     },
     "full": {
-        "description": "Scan complet — services, OS et scripts de vulnérabilité (CVSSv2 ≥ 5.0)",
-        # -Pn            : hôtes pré-confirmés, pas besoin de re-ping
-        # --host-timeout : évite qu'un hôte bloque un thread indéfiniment
-        # --max-retries  : retry sur perte de paquets (WiFi, réseaux bruyants)
-        "arguments": "-sS -sV -O --script vuln,default --script-args mincvss=5.0 -T4 -Pn --host-timeout 300s --max-retries 3",
-    },
-    "stealth": {
-        "description": "Scan furtif — rythme lent, randomisé, conçu pour éviter IDS/IPS et logs réseau",
-        # -T1            : timing paranoïaque (délai ~15s entre sondes)
-        # --max-rate 10  : max 10 paquets/s pour rester sous les seuils de détection courants
-        # --randomize-hosts : ordre aléatoire pour éviter les patterns prévisibles
-        # --data-length  : padding aléatoire pour contourner la signature nmap
-        "arguments": "-sS -T1 -n --open -Pn --max-rate 10 --randomize-hosts --data-length 24",
-    },
-    "web": {
-        "description": "Scan web — HTTP/HTTPS, énumération de chemins et scripts de vulnérabilité web",
-        # Restreint aux ports web courants pour aller plus vite
-        # Scripts : titres de pages, méthodes HTTP autorisées, découverte de répertoires
-        "arguments": "-sS -sV --script http-headers,http-title,http-methods,http-enum,http-auth-finder,http-default-accounts -T4 -Pn",
-        # ports override: uniquement les ports web — plus ciblé que DEFAULT_PORTS
-        "ports": "80,443,3000,4443,5000,7001,7443,8000,8080,8443,8888,9000,9090,9200,9443",
-    },
-    "udp": {
-        "description": "Scan UDP — services UDP exposés (DNS, SNMP, TFTP, NTP, SSDP, mDNS…)",
-        # -sU            : mode UDP (nécessite root)
-        # --top-ports 200: les 200 ports UDP les plus courants (compromis vitesse/couverture)
-        # Pas de scripts : les scripts UDP sont très lents
-        "arguments": "-sU --top-ports 200 -T4 -Pn",
+        "description": "Scan complet — services, OS et scripts de vulnérabilité (CVSSv2 ≥ 4.0)",
+        # -Pn              : hôtes pré-confirmés, pas besoin de re-ping
+        # --script vuln    : suffisant — "default" est inclus dans "vuln" (évite la redondance)
+        # mincvss=4.0      : capture toute la plage "medium" (FIRST/NVD ≥ 4.0)
+        # --host-timeout   : évite qu'un hôte bloque un thread indéfiniment
+        # --max-retries 2  : Ethernet fiable → 2 suffit (défaut nmap = 10, trop)
+        "arguments": "-sS -sV -O --script vuln --script-args mincvss=4.0 -T4 -Pn --host-timeout 300s --max-retries 2",
     },
 }
 

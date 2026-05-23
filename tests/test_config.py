@@ -95,27 +95,7 @@ def test_scan_profiles_have_required_keys():
 
 def test_all_builtin_profiles_present():
     from config import SCAN_PROFILES
-    assert set(SCAN_PROFILES.keys()) >= {"quick", "full", "stealth", "web", "udp"}
-
-
-def test_stealth_profile_uses_low_rate():
-    from config import SCAN_PROFILES
-    args = SCAN_PROFILES["stealth"]["arguments"]
-    assert "--max-rate" in args
-    assert "-T1" in args
-
-
-def test_web_profile_has_port_override():
-    from config import SCAN_PROFILES
-    assert "ports" in SCAN_PROFILES["web"]
-    ports = SCAN_PROFILES["web"]["ports"]
-    assert "443" in ports
-    assert "80" in ports
-
-
-def test_udp_profile_uses_sU():
-    from config import SCAN_PROFILES
-    assert "-sU" in SCAN_PROFILES["udp"]["arguments"]
+    assert set(SCAN_PROFILES.keys()) == {"quick", "full"}
 
 
 def test_fallback_profile_is_quick():

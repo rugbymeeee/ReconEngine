@@ -21,6 +21,10 @@ log = logging.getLogger(__name__)
 
 SCRIPT_DIR = pathlib.Path(__file__).parent.resolve()
 
+# Fallback léger : ports + versions, sans scripts vuln (qui peuvent timeout).
+# Préserve -sV pour l'enrichissement CVE même quand le profil full échoue.
+_FALLBACK_ARGS = "-sS -sV -T4 -Pn --open --max-retries 1 --host-timeout 90s --min-parallelism 20"
+
 _NMAP_PATH = tuple(filter(None, [
     os.environ.get("NMAP_PATH"),
     shutil.which("nmap"),
@@ -82,18 +86,18 @@ def scan_host(
         log.info("%-16s  profil=%-8s  durée=%5.1fs  ports_ouverts=%d", ip, profile, elapsed, open_count)
         return nm[ip]
 
-    # Retry avec le profil fallback (quick) si le scan principal n'a rien renvoyé.
-    # Utile pour les profils lents (full, stealth, udp) où l'hôte peut être présent
-    # mais timeout sur les scripts ou les sockets UDP.
+    # Retry avec un fallback léger si le scan principal n'a rien renvoyé.
+    # Utile pour le profil full où l'hôte peut être présent mais timeout sur
+    # les scripts vuln. Le fallback préserve -sV pour ne pas perdre l'enrichissement CVE.
     # Désactivable via RECONENGINE_FALLBACK_DISABLED=1.
     if os.environ.get("RECONENGINE_FALLBACK_DISABLED", "0") != "1" and profile != FALLBACK_PROFILE and not arguments:
         log.warning(
-            "Scan '%s' sans résultat pour %s — retry profil '%s' (ports ouverts seulement)",
-            profile, ip, FALLBACK_PROFILE,
+            "Scan '%s' sans résultat pour %s — retry fallback léger (ports + versions, sans scripts)",
+            profile, ip,
         )
         nm2 = _get_portscanner()
         try:
-            nm2.scan(ip, ports, arguments=SCAN_PROFILES[FALLBACK_PROFILE]["arguments"])
+            nm2.scan(ip, ports, arguments=_FALLBACK_ARGS)
         except Exception as e:
             log.error("Retry scan échoué pour %s : %s", ip, e)
             return None

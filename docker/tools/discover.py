@@ -76,20 +76,19 @@ def _interface_networks() -> tuple[dict, set]:
     return networks, local_ips
 
 
-def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 1) -> dict:
+def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 2) -> dict:
     """
     ARP broadcast sur le réseau. Retourne {ip: {"ip": str, "mac": str}}.
 
-    `retry` passes avec inter=0 (rafale de paquets) pour améliorer la détection
-    sur les réseaux WiFi où des réponses ARP peuvent être perdues.
+    `retry` passes avec inter=0 (rafale de paquets) — sur Ethernet 1 suffit,
+    mais 2 passes capturent les hôtes qui dormaient brièvement (ACPI, etc.).
     """
     if not _is_root():
         log.warning("[ARP] Ignoré — droits root requis.")
         return {}
-    # Sur les grands réseaux WiFi, les paquets ARP transitent via l'AP et les
-    # délais de réponse sont plus élevés qu'en filaire — augmenter le timeout.
+    # Sur les grands réseaux, beaucoup d'hôtes à interroger → timeout plus long.
     if network.prefixlen <= 16:
-        timeout = max(timeout, 30)   # /16 = 65536 hôtes, WiFi latency
+        timeout = max(timeout, 30)   # /16 = 65536 hôtes
     elif network.prefixlen <= 20:
         timeout = max(timeout, 15)   # /17–/20
 
@@ -159,12 +158,12 @@ def _discover_network(network: ipaddress.IPv4Network, timeout: int) -> dict:
         if small_network:
             # ARP + nmap ping en parallèle : on prend le meilleur des deux
             with ThreadPoolExecutor(max_workers=2) as ex:
-                arp_fut  = ex.submit(_arp_scan, network, timeout)
+                arp_fut  = ex.submit(_arp_scan, network, timeout, 2)
                 nmap_fut = ex.submit(_nmap_ping, network, timeout)
             arp        = arp_fut.result()
             nmap_hosts = nmap_fut.result()
         else:
-            arp        = _arp_scan(network, timeout=timeout)
+            arp        = _arp_scan(network, timeout=timeout, retry=2)
             nmap_hosts = {}
     else:
         arp = {}

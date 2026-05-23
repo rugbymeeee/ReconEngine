@@ -17,6 +17,7 @@ from ipaddress import AddressValueError, ip_address
 
 import cve as cve_mod
 import exploits as exploit_mod
+import mac_vendor
 import scan as scan_mod
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from weasyprint import HTML
@@ -54,6 +55,32 @@ HIGH_RISK_SERVICES = {
     "vnc", "ms-wbt-server", "x11",
     "snmp", "ldap", "ldaps", "java-rmi", "docker",
 }
+
+
+def has_critical_exposure(scan_results: dict) -> bool:
+    """
+    Détermine si au moins un hôte a un port critique ouvert ou un service à risque élevé.
+
+    Utilisé par main.py / api.py pour piloter l'état final des LED (DONE_CRITICAL vs DONE_OK)
+    sans dupliquer la logique de classification.
+
+    Args:
+        scan_results: dict ip → nmap.PortScannerHostDict (tel que produit par scan.scan_host)
+    """
+    for data in scan_results.values():
+        try:
+            protocols = data.all_protocols()
+        except Exception:
+            continue
+        for proto in protocols:
+            for port in data[proto]:
+                pinfo = data[proto][port]
+                if pinfo.get("state") != "open":
+                    continue
+                if port in CRITICAL_PORTS or (pinfo.get("name") or "").lower() in HIGH_RISK_SERVICES:
+                    return True
+    return False
+
 
 # ── Classification hôtes ───────────────────────────────────────────────────────
 _SERVER_OS_KW = (
@@ -842,10 +869,25 @@ def _format_service(pinfo: dict) -> str:
 
 
 def software_query(pinfo: dict) -> str:
-    """Construit la chaîne de recherche exploit la plus précise possible."""
+    """
+    Construit la chaîne de recherche exploit la plus précise possible.
+
+    Retourne une chaîne vide si nmap n'a pas identifié AU MOINS le produit ET
+    la version :
+      - "http"/"ssh"/"ftp" sans product → searchsploit matche des milliers
+        d'exploits génériques sans rapport avec la version réelle.
+      - "nginx"/"Apache" sans version → searchsploit retourne tout l'historique
+        des CVE du produit, dont l'écrasante majorité sur des versions qui ne
+        sont probablement pas la nôtre.
+    Dans ces cas, on s'en remet à la classification par port (CRITICAL_PORTS)
+    et aux scripts nmap (CVE via --script vuln) — plus fiables que des matches
+    textuels approximatifs.
+    """
     product = (pinfo.get("product") or "").strip()
     version = (pinfo.get("version") or "").strip()
-    return " ".join(filter(None, [product, version])) or (pinfo.get("name") or "")
+    if not product or not version:
+        return ""
+    return f"{product} {version}"
 
 
 def _risk_from_counts(counts: dict) -> tuple[float, str]:
@@ -879,6 +921,7 @@ def _build_unreachable_host(ip: str, mac: str = "N/A") -> dict:
     return {
         "ip":                    ip,
         "mac":                   mac,
+        "vendor":                mac_vendor.vendor(mac),
         "os":                    "",
         "host_type":             "unknown",
         "risk":                  "FAIBLE",
@@ -1041,6 +1084,7 @@ def _build_topology(all_hosts: list[dict], hosts: list) -> list:
         host = host_by_ip.get(ip_str, _build_unreachable_host(ip_str, mac))
         entry = dict(host)
         entry["mac"] = mac  # override with ARP-discovered MAC (plus fiable)
+        entry["vendor"] = mac_vendor.vendor(mac)
         last_octet = ip_str.rsplit(".", 1)[-1] if "." in ip_str else ""
         entry["is_gateway"] = last_octet in ("1", "254")
         subnets[subnet].append(entry)
@@ -1318,6 +1362,7 @@ def build_report_data(
             continue
         host = _build_host(ip, data, total_ports, cache)
         host["mac"] = mac_by_ip.get(ip, "N/A")
+        host["vendor"] = mac_vendor.vendor(host["mac"])
         hosts.append(host)
         total_open += host["open_ports_count"]
         total_filtered += host["filtered_ports_count"]
@@ -1441,9 +1486,13 @@ def build_report_data(
 
     target_ips = [h["ip"] for h in all_hosts]
 
+    # Date affichée : heure locale (lisible par l'utilisateur)
+    # Scan ID : UTC pour matcher le nom de fichier généré par generate_report
+    _now_local = datetime.datetime.now()
+    _now_utc   = datetime.datetime.now(datetime.UTC)
     return {
-        "date_scan":              datetime.datetime.now().strftime("%d/%m/%Y à %H:%M"),
-        "scan_id":                f"RE-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+        "date_scan":              _now_local.strftime("%d/%m/%Y à %H:%M"),
+        "scan_id":                f"RE-{_now_utc.strftime('%Y%m%d%H%M%S')}",
         "target_ips":             target_ips,
         "host_count":             n_hosts,
         "discovered_count":       n_discovered,
@@ -1539,19 +1588,30 @@ def generate_report(
     html_content = template.render(data)
 
     def _local_url_fetcher(url: str) -> dict:
-        # Block any resource not under the templates directory — prevents
-        # WeasyPrint from following injected file:// or http:// URIs that
-        # could originate from unescaped nmap banner data.
-        resolved = pathlib.Path(url.removeprefix("file://")).resolve() if url.startswith("file://") else None
-        if resolved is None or not str(resolved).startswith(str(TEMPLATES_DIR)):
-            raise URLFetchingError(f"Ressource externe bloquée : {url}")
-        return default_url_fetcher(url)
+        # Autorise :
+        #   - data: URIs (contenu inline binaire, ex: PNG base64 matplotlib → carto réseau)
+        #   - file:// URIs résolues sous TEMPLATES_DIR (CSS/images du thème)
+        # Bloque tout le reste pour éviter le SSRF si un banner nmap injecte du HTML.
+        if url.startswith("data:"):
+            return default_url_fetcher(url)
+        if url.startswith("file://"):
+            resolved = pathlib.Path(url.removeprefix("file://")).resolve()
+            if str(resolved).startswith(str(TEMPLATES_DIR)):
+                return default_url_fetcher(url)
+        log.warning("Ressource externe bloquée par le sandbox PDF : %s", url[:120])
+        raise URLFetchingError(f"Ressource externe bloquée : {url}")
 
     log.info("Rendu PDF en cours...")
-    HTML(string=html_content, base_url=str(TEMPLATES_DIR)).write_pdf(
-        str(out), url_fetcher=_local_url_fetcher
-    )
-    os.chmod(out, 0o600)
+    # url_fetcher se passe au constructeur HTML(), pas à write_pdf() — sinon
+    # WeasyPrint l'ignore silencieusement avec "Unknown rendering option".
+    HTML(
+        string=html_content,
+        base_url=str(TEMPLATES_DIR),
+        url_fetcher=_local_url_fetcher,
+    ).write_pdf(str(out))
+    # 0o644 (et non 0o600) : l'outil tourne en root pour les raw sockets nmap,
+    # mais l'utilisateur normal doit pouvoir ouvrir le PDF dans son navigateur.
+    os.chmod(out, 0o644)
     log.info("Rapport généré : %s", out)
     return str(out)
 

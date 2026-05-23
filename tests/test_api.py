@@ -49,8 +49,9 @@ def client(isolated_db):
     if "api" in sys.modules:
         del sys.modules["api"]
     import api as api_mod
-    api_mod._db_init()
-    return TestClient(api_mod.app)
+    # Context manager triggers lifespan startup/shutdown (Config load, DB init, LEDs)
+    with TestClient(api_mod.app) as c:
+        yield c
 
 
 # ── /health ────────────────────────────────────────────────────────────────────
@@ -116,7 +117,7 @@ def test_start_scan_invalid_profile(client):
     assert resp.status_code == 422  # Pydantic validation error
 
 
-@pytest.mark.parametrize("profile", ["quick", "full", "stealth", "web", "udp"])
+@pytest.mark.parametrize("profile", ["quick", "full"])
 def test_start_scan_all_valid_profiles(client, profile):
     with patch("api._run_scan"):
         resp = client.post(
@@ -262,7 +263,7 @@ def test_list_profiles_contains_builtin_profiles(client):
     resp = client.get("/profiles")
     data = resp.json()
     names = {p["name"] for p in data}
-    assert {"quick", "full", "stealth", "web", "udp"} <= names
+    assert {"quick", "full"} == names
 
 
 def test_list_profiles_schema(client):
@@ -273,13 +274,6 @@ def test_list_profiles_schema(client):
         assert "arguments" in p
         assert p["description"]
         assert p["arguments"]
-
-
-def test_web_profile_has_port_override(client):
-    resp = client.get("/profiles")
-    web = next(p for p in resp.json() if p["name"] == "web")
-    assert web["ports"] is not None
-    assert "443" in web["ports"]
 
 
 def test_quick_profile_has_no_port_override(client):
