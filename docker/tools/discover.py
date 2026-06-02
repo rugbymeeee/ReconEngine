@@ -127,7 +127,14 @@ def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 2) 
             log.error("[ARP] Permission refusée (nécessite root).")
             break  # unrecoverable — root required
         except Exception as e:
+            msg = str(e)
             log.warning("[ARP] Erreur : %s", e)
+            if "Failed to compile filter expression" in msg or "Cannot set filter" in msg:
+                if network.prefixlen >= _NMAP_MAX_PREFIX:
+                    log.warning("[ARP] Filtre libpcap invalide — fallback nmap -PR.")
+                    return _nmap_arp_ping(network, timeout=timeout)
+                log.warning("[ARP] Filtre libpcap invalide — fallback nmap -PR ignoré sur grand réseau.")
+                return {}
             # transient error — continue remaining retries
     return hosts
 
@@ -160,6 +167,37 @@ def _nmap_ping(hosts: str | list[str], timeout: int = 30) -> dict:
             return {}
     except Exception as e:
         log.error("[NMAP] Ping sweep échoué : %s", e)
+        return {}
+
+    hosts: dict = {}
+    for host in nm.all_hosts():
+        try:
+            state = nm[host].state()
+        except Exception:
+            state = "unknown"
+        if state == "up":
+            try:
+                mac = nm[host].get("addresses", {}).get("mac", "N/A")
+            except Exception:
+                mac = "N/A"
+            hosts[host] = {"ip": host, "mac": mac or "N/A"}
+    return hosts
+
+
+def _nmap_arp_ping(network: ipaddress.IPv4Network, timeout: int = 30) -> dict:
+    """
+    Découverte ARP via nmap (-PR). Retourne {ip: {"ip": str, "mac": str}}.
+    """
+    nm = scan._get_portscanner()
+    try:
+        nm.scan(
+            hosts=str(network),
+            arguments=(
+                f"-sn -PR -n -T4 --host-timeout {timeout}s --max-retries 1 --min-parallelism 50"
+            ),
+        )
+    except Exception as e:
+        log.error("[NMAP] ARP ping échoué : %s", e)
         return {}
 
     hosts: dict = {}
@@ -354,6 +392,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Découverte d'hôtes réseau")
     p.add_argument("-i", "--iface", help="Interface (ex: eth0)")
     p.add_argument("-n", "--network", help="Réseau CIDR (ex: 192.168.1.0/24)")
+    p.add_argument("-t", "--timeout", type=int, default=500)
     p.add_argument("--allow-large-nmap", action="store_true", help="Autorise nmap sur grands réseaux")
     p.add_argument("--large-nmap-max-ports", type=int, default=16)
     p.add_argument("--large-nmap-max-hosts", type=int, default=1024)

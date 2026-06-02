@@ -11,6 +11,7 @@ Usage :
   python main.py [quick|full] [-t CIDR] [-i IFACE] [-o OUTPUT] [--ports PORTS] [--workers N] [--timeout SEC]
 """
 import argparse
+import ipaddress
 import datetime
 import logging
 import os
@@ -153,6 +154,9 @@ def main() -> None:
     parser.add_argument("--allow-large-nmap", action="store_true", help="Autorise nmap sur grands réseaux si ports limités")
     parser.add_argument("--large-nmap-max-ports", metavar="N", type=int, help="Seuil de ports pour nmap sur grands réseaux (défaut : 16)")
     parser.add_argument("--large-nmap-max-hosts", metavar="N", type=int, help="Limite d'hôtes scannés par nmap sur grands réseaux (défaut : 1024)")
+    parser.add_argument("--localhost-first", action="store_true", help="Scanne 127.0.0.1 en premier")
+    parser.add_argument("--scan-all", action="store_true", help="Scanne tout le réseau si la découverte est vide")
+    parser.add_argument("--scan-all-max-hosts", metavar="N", type=int, help="Limite d'hôtes pour --scan-all (défaut : 1024)")
     parser.add_argument("--no-pdf",        action="store_true", help="Affiche les résultats terminal uniquement, sans générer de PDF")
     parser.add_argument("-v", "--verbose", action="store_true", help="Affiche les messages de débogage (logging DEBUG)")
     args = parser.parse_args()
@@ -175,6 +179,32 @@ def main() -> None:
         cfg.scan.large_nmap_max_ports = cfg_mod._validate_large_nmap_max_ports(args.large_nmap_max_ports)
     if args.large_nmap_max_hosts:
         cfg.scan.large_nmap_max_hosts = cfg_mod._validate_large_nmap_max_hosts(args.large_nmap_max_hosts)
+
+    localhost_first = args.localhost_first
+    if not localhost_first:
+        env_localhost_first = os.environ.get("RECONENGINE_LOCALHOST_FIRST", "").strip().lower()
+        if env_localhost_first in {"1", "true", "yes", "y", "on"}:
+            localhost_first = True
+
+    scan_all = args.scan_all
+    if not scan_all:
+        env_scan_all = os.environ.get("RECONENGINE_SCAN_ALL", "").strip().lower()
+        if env_scan_all in {"1", "true", "yes", "y", "on"}:
+            scan_all = True
+
+    scan_all_max_hosts = None
+    if args.scan_all_max_hosts is not None:
+        scan_all_max_hosts = cfg_mod._validate_large_nmap_max_hosts(args.scan_all_max_hosts)
+    else:
+        env_scan_all_max_hosts = os.environ.get("RECONENGINE_SCAN_ALL_MAX_HOSTS")
+        if env_scan_all_max_hosts is not None:
+            try:
+                scan_all_max_hosts = cfg_mod._validate_large_nmap_max_hosts(int(env_scan_all_max_hosts))
+            except ValueError as e:
+                log.error("RECONENGINE_SCAN_ALL_MAX_HOSTS invalide : %s", e)
+                raise SystemExit(1) from e
+        else:
+            scan_all_max_hosts = cfg.scan.large_nmap_max_hosts
 
     console = Console()
     profile_info = cfg_mod.SCAN_PROFILES.get(cfg.scan.profile, cfg_mod.SCAN_PROFILES["full"])
@@ -213,6 +243,56 @@ def main() -> None:
         status.set_state(status.State.ERROR)
         status.shutdown()
         raise
+
+    if not discovered_hosts and scan_all:
+        networks = []
+        local_ips: set[str] = set()
+        if args.target:
+            networks = [ipaddress.ip_network(args.target, strict=False)]
+        else:
+            detected, local_ips = discover._interface_networks()
+            target_iface = args.iface or os.environ.get("RECONENGINE_IFACE")
+            if target_iface:
+                networks = [v["network"] for v in detected.values() if v["iface"] == target_iface]
+            else:
+                networks = [v["network"] for v in detected.values()]
+
+        if networks:
+            ips = []
+            total_possible = 0
+            for net in networks:
+                total_possible += max(net.num_addresses - 2, 0)
+                for ip in net.hosts():
+                    ip_str = str(ip)
+                    if ip_str in local_ips:
+                        continue
+                    ips.append(ip_str)
+                    if scan_all_max_hosts and len(ips) >= scan_all_max_hosts:
+                        break
+                if scan_all_max_hosts and len(ips) >= scan_all_max_hosts:
+                    break
+
+            if scan_all_max_hosts and total_possible > scan_all_max_hosts:
+                log.warning(
+                    "scan-all actif : limite %d hôte(s) appliquée (sur %d possibles).",
+                    scan_all_max_hosts,
+                    total_possible,
+                )
+            if ips:
+                discovered_hosts = [{"ip": ip, "mac": "N/A"} for ip in ips]
+                log.info("scan-all actif : %d hôte(s) chargés pour le scan.", len(ips))
+        else:
+            log.warning("scan-all actif mais aucun réseau détecté.")
+
+    if localhost_first:
+        localhost_ip = "127.0.0.1"
+        local_entry = next((h for h in discovered_hosts if h.get("ip") == localhost_ip), None)
+        rest = [h for h in discovered_hosts if h.get("ip") != localhost_ip]
+        if not local_entry:
+            local_entry = {"ip": localhost_ip, "mac": "N/A"}
+        discovered_hosts = [local_entry] + rest
+        log.info("localhost-first actif : %s scanne en premier", localhost_ip)
+
     ips = [h["ip"] for h in discovered_hosts]
 
     if not ips:
@@ -246,38 +326,50 @@ def main() -> None:
     ) as progress:
         task_id = progress.add_task("Scan en cours…", total=len(ips))
 
-        with ThreadPoolExecutor(max_workers=cfg.scan.max_workers) as executor:
-            if twophase:
-                futures = {
-                    executor.submit(scan.scan_host_twophase, ip, cfg.scan.profile): ip
-                    for ip in ips
-                }
+        def _scan_ip(ip: str):
+            try:
+                if twophase:
+                    return scan.scan_host_twophase(ip, cfg.scan.profile)
+                return scan.scan_host(ip, cfg.scan.ports, cfg.scan.profile)
+            except nmap.PortScannerError as e:
+                log.error("Erreur nmap pour %s (vérifier les droits root ou le chemin nmap) : %s", ip, e)
+                return None
+            except TimeoutError as e:
+                log.warning("Timeout scan pour %s : %s", ip, e)
+                return None
+            except OSError as e:
+                log.error("Erreur système lors du scan de %s : %s", ip, e)
+                return None
+            except Exception as e:
+                log.error("Erreur inattendue pour %s [%s] : %s", ip, type(e).__name__, e)
+                return None
+
+        remaining_ips = ips
+        if localhost_first and ips:
+            first_ip = ips[0]
+            remaining_ips = ips[1:]
+            result = _scan_ip(first_ip)
+            progress.advance(task_id)
+            if result is not None:
+                scan_results[first_ip] = result
             else:
-                futures = {
-                    executor.submit(scan.scan_host, ip, cfg.scan.ports, cfg.scan.profile): ip
-                    for ip in ips
-                }
-            for future in as_completed(futures):
-                ip = futures[future]
-                progress.advance(task_id)
-                try:
-                    result = future.result()
-                except nmap.PortScannerError as e:
-                    log.error("Erreur nmap pour %s (vérifier les droits root ou le chemin nmap) : %s", ip, e)
-                    result = None
-                except TimeoutError as e:
-                    log.warning("Timeout scan pour %s : %s", ip, e)
-                    result = None
-                except OSError as e:
-                    log.error("Erreur système lors du scan de %s : %s", ip, e)
-                    result = None
-                except Exception as e:
-                    log.error("Erreur inattendue pour %s [%s] : %s", ip, type(e).__name__, e)
-                    result = None
-                if result is not None:
-                    scan_results[ip] = result
-                else:
-                    log.info("Hôte %s : aucun port détecté ou inaccessible", ip)
+                log.info("Hôte %s : aucun port détecté ou inaccessible", first_ip)
+
+        if remaining_ips:
+            with ThreadPoolExecutor(max_workers=cfg.scan.max_workers) as executor:
+                futures = {executor.submit(_scan_ip, ip): ip for ip in remaining_ips}
+                for future in as_completed(futures):
+                    ip = futures[future]
+                    progress.advance(task_id)
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        log.error("Erreur inattendue pour %s [%s] : %s", ip, type(e).__name__, e)
+                        result = None
+                    if result is not None:
+                        scan_results[ip] = result
+                    else:
+                        log.info("Hôte %s : aucun port détecté ou inaccessible", ip)
 
     elapsed = time.monotonic() - start
     m, s = divmod(int(elapsed), 60)
