@@ -150,6 +150,9 @@ def main() -> None:
     parser.add_argument("--ports",         metavar="PORTS", help="Ports à scanner (ex: 22,80,443 ou 1-1024)")
     parser.add_argument("--workers",       metavar="N",     type=int, help="Threads parallèles (défaut : 8)")
     parser.add_argument("--timeout",       metavar="SEC",   type=int, help="Délai découverte ARP en secondes (défaut : 5)")
+    parser.add_argument("--allow-large-nmap", action="store_true", help="Autorise nmap sur grands réseaux si ports limités")
+    parser.add_argument("--large-nmap-max-ports", metavar="N", type=int, help="Seuil de ports pour nmap sur grands réseaux (défaut : 16)")
+    parser.add_argument("--large-nmap-max-hosts", metavar="N", type=int, help="Limite d'hôtes scannés par nmap sur grands réseaux (défaut : 1024)")
     parser.add_argument("--no-pdf",        action="store_true", help="Affiche les résultats terminal uniquement, sans générer de PDF")
     parser.add_argument("-v", "--verbose", action="store_true", help="Affiche les messages de débogage (logging DEBUG)")
     args = parser.parse_args()
@@ -166,6 +169,12 @@ def main() -> None:
         cfg.scan.max_workers = args.workers
     if args.timeout:
         cfg.scan.discovery_timeout = args.timeout
+    if args.allow_large_nmap:
+        cfg.scan.allow_large_nmap = True
+    if args.large_nmap_max_ports:
+        cfg.scan.large_nmap_max_ports = cfg_mod._validate_large_nmap_max_ports(args.large_nmap_max_ports)
+    if args.large_nmap_max_hosts:
+        cfg.scan.large_nmap_max_hosts = cfg_mod._validate_large_nmap_max_hosts(args.large_nmap_max_hosts)
 
     console = Console()
     profile_info = cfg_mod.SCAN_PROFILES.get(cfg.scan.profile, cfg_mod.SCAN_PROFILES["full"])
@@ -184,10 +193,21 @@ def main() -> None:
     status.set_state(status.State.DISCOVERING)
     console.print("\n[bold]Phase 1[/] — Découverte des hôtes")
     try:
+        port_count = _port_count(cfg.scan.ports)
+        if cfg.scan.allow_large_nmap and port_count > cfg.scan.large_nmap_max_ports:
+            log.warning(
+                "allow-large-nmap actif mais ports=%d > seuil=%d — nmap sur grands réseaux sera ignoré.",
+                port_count,
+                cfg.scan.large_nmap_max_ports,
+            )
         discovered_hosts = discover.discover(
             iface=args.iface or os.environ.get("RECONENGINE_IFACE") or None,
             network=args.target,
             timeout=cfg.scan.discovery_timeout,
+            allow_large_nmap=cfg.scan.allow_large_nmap,
+            port_count=port_count,
+            large_nmap_max_ports=cfg.scan.large_nmap_max_ports,
+            large_nmap_max_hosts=cfg.scan.large_nmap_max_hosts,
         )
     except Exception:
         status.set_state(status.State.ERROR)

@@ -139,12 +139,40 @@ def _validate_timeout(value: int) -> int:
     return value
 
 
+def _validate_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    s = str(value).strip().lower()
+    if s in {"1", "true", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Valeur booléenne invalide : '{value}'.")
+
+
+def _validate_large_nmap_max_ports(value: int) -> int:
+    if value < 1 or value > 256:
+        raise ValueError(f"large_nmap_max_ports doit être entre 1 et 256 (reçu : {value}).")
+    return value
+
+
+def _validate_large_nmap_max_hosts(value: int) -> int:
+    if value < 1 or value > 65535:
+        raise ValueError(f"large_nmap_max_hosts doit être entre 1 et 65535 (reçu : {value}).")
+    return value
+
+
 @dataclass
 class ScanConfig:
     ports: str = DEFAULT_PORTS
     profile: str = "full"
     discovery_timeout: int = 5
     max_workers: int = 8
+    allow_large_nmap: bool = False
+    large_nmap_max_ports: int = 16
+    large_nmap_max_hosts: int = 1024
 
 
 @dataclass
@@ -172,6 +200,16 @@ class Config:
                         cfg.scan.max_workers = _validate_workers(int(s["max_workers"]))
                     if "discovery_timeout" in s:
                         cfg.scan.discovery_timeout = _validate_timeout(int(s["discovery_timeout"]))
+                    if "allow_large_nmap" in s:
+                        cfg.scan.allow_large_nmap = _validate_bool(s["allow_large_nmap"])
+                    if "large_nmap_max_ports" in s:
+                        cfg.scan.large_nmap_max_ports = _validate_large_nmap_max_ports(
+                            int(s["large_nmap_max_ports"])
+                        )
+                    if "large_nmap_max_hosts" in s:
+                        cfg.scan.large_nmap_max_hosts = _validate_large_nmap_max_hosts(
+                            int(s["large_nmap_max_hosts"])
+                        )
                     if "output_dir" in data:
                         cfg.output_dir = str(data["output_dir"])
                 except (ValueError, KeyError, TypeError) as e:
@@ -205,6 +243,27 @@ class Config:
         if v := os.environ.get("RECONENGINE_DISCOVERY_TIMEOUT"):
             with contextlib.suppress(ValueError):
                 cfg.scan.discovery_timeout = _validate_timeout(int(v))
+
+        if v := os.environ.get("RECONENGINE_ALLOW_LARGE_NMAP"):
+            try:
+                cfg.scan.allow_large_nmap = _validate_bool(v)
+            except ValueError as e:
+                log.error("RECONENGINE_ALLOW_LARGE_NMAP invalide : %s", e)
+                raise SystemExit(1) from e
+
+        if v := os.environ.get("RECONENGINE_LARGE_NMAP_MAX_PORTS"):
+            try:
+                cfg.scan.large_nmap_max_ports = _validate_large_nmap_max_ports(int(v))
+            except ValueError as e:
+                log.error("RECONENGINE_LARGE_NMAP_MAX_PORTS invalide : %s", e)
+                raise SystemExit(1) from e
+
+        if v := os.environ.get("RECONENGINE_LARGE_NMAP_MAX_HOSTS"):
+            try:
+                cfg.scan.large_nmap_max_hosts = _validate_large_nmap_max_hosts(int(v))
+            except ValueError as e:
+                log.error("RECONENGINE_LARGE_NMAP_MAX_HOSTS invalide : %s", e)
+                raise SystemExit(1) from e
 
         if cfg.scan.profile not in SCAN_PROFILES:
             raise ValueError(
