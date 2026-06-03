@@ -14,7 +14,9 @@ import logging
 import os
 import socket
 import struct
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable
 
 try:
     import fcntl
@@ -24,7 +26,19 @@ except ImportError:
 
 import nmap
 import scan
-from scapy.all import arping, get_if_addr, get_if_list
+from scapy.all import ARP, Ether, arping, get_if_addr, get_if_list, srp
+
+# AsyncSniffer permet la remontée en temps réel des réponses ARP — fail-safe :
+# si scapy ne l'expose pas (très vieille version, ou stub de test), on retombe
+# sur les callbacks émis à la fin de chaque passe arping/srp.
+try:
+    from scapy.all import AsyncSniffer  # type: ignore
+    _HAS_SNIFFER = True
+except ImportError:
+    AsyncSniffer = None  # type: ignore
+    _HAS_SNIFFER = False
+
+HostCallback = Callable[[str, str], None]
 
 log = logging.getLogger(__name__)
 
@@ -99,12 +113,74 @@ def _interface_networks() -> tuple[dict, set]:
     return networks, local_ips
 
 
-def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 2) -> dict:
-    """
-    ARP broadcast sur le réseau. Retourne {ip: {"ip": str, "mac": str}}.
+_INVALID_MACS = frozenset({"", "00:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"})
 
-    `retry` passes avec inter=0 (rafale de paquets) — sur Ethernet 1 suffit,
-    mais 2 passes capturent les hôtes qui dormaient brièvement (ACPI, etc.).
+
+def _normalize_mac(mac: str | None) -> str:
+    """Normalise une MAC en minuscules `aa:bb:cc:dd:ee:ff`. Retourne '' si invalide."""
+    if not mac:
+        return ""
+    mac = mac.strip().lower().replace("-", ":")
+    if mac in _INVALID_MACS:
+        return ""
+    return mac
+
+
+def _read_arp_cache(iface: str | None = None) -> dict[str, str]:
+    """
+    Lit le cache ARP du noyau (`/proc/net/arp`). Retourne `{ip: mac}`.
+
+    Ne garde que les entrées avec flag 0x2 (REACHABLE/COMPLETE) — les autres
+    sont des sondes du noyau encore sans réponse, donc non fiables.
+    Filtre par interface si `iface` fourni.
+    """
+    cache: dict[str, str] = {}
+    try:
+        with open("/proc/net/arp") as f:
+            next(f, None)  # header
+            for line in f:
+                parts = line.split()
+                if len(parts) < 6:
+                    continue
+                ip, _hwtype, flags, mac, _mask, dev = parts[:6]
+                if flags != "0x2":
+                    continue
+                if iface and dev != iface:
+                    continue
+                mac_n = _normalize_mac(mac)
+                if not mac_n:
+                    continue
+                cache[ip] = mac_n
+    except (FileNotFoundError, PermissionError):
+        return {}
+    except Exception as e:  # noqa: BLE001
+        log.debug("[ARP] Lecture /proc/net/arp échouée : %s", e)
+    return cache
+
+
+def _arp_scan(
+    network: ipaddress.IPv4Network,
+    timeout: int = 5,
+    retry: int = 2,
+    iface: str | None = None,
+    on_host_found: HostCallback | None = None,
+) -> dict:
+    """
+    ARP broadcast sur le réseau. Retourne `{ip: {"ip": str, "mac": str}}`.
+
+    Précision :
+      1. `inter` > 0 entre paquets — évite la perte sur switch/driver saturé (la
+         rafale `inter=0` est la principale cause de faux négatifs).
+      2. `iface=` explicite — force la bonne carte sur machine multi-homed.
+      3. Retransmission ciblée sur l'ensemble `unans` plutôt qu'un broadcast
+         identique au tour 2 → récupère les hôtes lents/endormis (ACPI).
+      4. Recoupement avec `/proc/net/arp` (entrées REACHABLE du noyau).
+      5. Filtre les réponses hors-réseau (paquets égarés / proxy ARP étranger).
+      6. Détecte les MACs conflictuels (proxy ARP / spoofing) et journalise.
+
+    Si `on_host_found` est fourni, l'`AsyncSniffer` scapy fait remonter chaque
+    réponse ARP en temps réel — le callback est appelé dès qu'un hôte répond,
+    pas en fin de passe. Il est invoqué une seule fois par IP (dédup interne).
     """
     if not _is_root():
         log.warning("[ARP] Ignoré — droits root requis.")
@@ -115,31 +191,167 @@ def _arp_scan(network: ipaddress.IPv4Network, timeout: int = 5, retry: int = 2) 
     elif network.prefixlen <= 20:
         timeout = max(timeout, 15)   # /17–/20
 
-    hosts: dict = {}
-    for _ in range(max(1, retry)):
+    # Espacement inter-paquets : la rafale (inter=0) sature pilotes et switchs
+    # et provoque des pertes de réponses. 2 ms sur /24 = ~0.5 s d'émission,
+    # impact négligeable face au gain de fiabilité.
+    if network.num_addresses <= 256:
+        inter = 0.003
+    elif network.num_addresses <= 4096:
+        inter = 0.002
+    else:
+        inter = 0.001
+
+    base_kwargs: dict = {"timeout": timeout, "verbose": False, "inter": inter}
+    if iface:
+        base_kwargs["iface"] = iface
+
+    # {ip: {mac: count}} — permet la détection de MACs multiples (spoof/proxy)
+    seen: dict[str, dict[str, int]] = {}
+    lock = threading.Lock()  # protège `seen` (sniffer + thread principal)
+
+    def _record(ip: str, mac: str) -> None:
+        mac_n = _normalize_mac(mac)
+        if not mac_n:
+            return
         try:
-            ans, _ = arping(str(network), timeout=timeout, verbose=False, inter=0)
+            if ipaddress.ip_address(ip) not in network:
+                return  # réponse étrangère, on ignore
+        except ValueError:
+            return
+        with lock:
+            first_time = ip not in seen
+            bucket = seen.setdefault(ip, {})
+            bucket[mac_n] = bucket.get(mac_n, 0) + 1
+        if first_time and on_host_found is not None:
+            try:
+                on_host_found(ip, mac_n)
+            except Exception as e:  # noqa: BLE001
+                log.debug("[ARP] on_host_found exception : %s", e)
+
+    # ── Sniffer asynchrone : remontée temps réel des réponses ARP ───────────
+    sniffer = None
+    if _HAS_SNIFFER and on_host_found is not None:
+        def _on_arp_pkt(pkt) -> None:
+            try:
+                if ARP in pkt and int(pkt[ARP].op) == 2:  # 2 = ARP reply (is-at)
+                    _record(pkt[ARP].psrc, pkt[ARP].hwsrc)
+            except Exception:
+                pass
+        sniffer_kwargs: dict = {"filter": "arp", "prn": _on_arp_pkt, "store": False}
+        if iface:
+            sniffer_kwargs["iface"] = iface
+        try:
+            sniffer = AsyncSniffer(**sniffer_kwargs)
+            sniffer.start()
+        except Exception as e:  # noqa: BLE001
+            log.debug("[ARP] AsyncSniffer indisponible (%s) — fallback batch.", e)
+            sniffer = None
+
+    try:
+        # ── Passe 1 : ARP broadcast complet ─────────────────────────────────
+        unans_targets: list[str] = []
+        try:
+            ans, unans = arping(str(network), **base_kwargs)
             for _, rcv in ans:
-                ip = rcv.psrc
-                if ip not in hosts:
-                    hosts[ip] = {"ip": ip, "mac": rcv.hwsrc}
+                _record(rcv.psrc, rcv.hwsrc)
+            # Extrait les IPs sans réponse pour la retransmission ciblée
+            for pkt in unans or []:
+                try:
+                    unans_targets.append(pkt[ARP].pdst)
+                except Exception:
+                    continue
         except PermissionError:
             log.error("[ARP] Permission refusée (nécessite root).")
-            break  # unrecoverable — root required
+            return {}
         except Exception as e:
             msg = str(e)
-            log.warning("[ARP] Erreur : %s", e)
+            log.warning("[ARP] Erreur passe 1 : %s", e)
             if "Failed to compile filter expression" in msg or "Cannot set filter" in msg:
                 if network.prefixlen >= _NMAP_MAX_PREFIX:
                     log.warning("[ARP] Filtre libpcap invalide — fallback nmap -PR.")
-                    return _nmap_arp_ping(network, timeout=timeout)
+                    return _nmap_arp_ping(network, timeout=timeout, on_host_found=on_host_found)
                 log.warning("[ARP] Filtre libpcap invalide — fallback nmap -PR ignoré sur grand réseau.")
                 return {}
-            # transient error — continue remaining retries
+
+        # ── Passes 2+ : retransmission ciblée sur les hôtes sans réponse ────
+        extra_passes = max(0, retry - 1)
+        if extra_passes and unans_targets:
+            if len(unans_targets) > 4096:
+                log.debug("[ARP] Retry ciblé tronqué à 4096 hôtes (sur %d).", len(unans_targets))
+                unans_targets = unans_targets[:4096]
+
+            retry_kwargs: dict = {
+                "timeout": max(2, timeout // 2),
+                "verbose": False,
+                "inter": 0.005,
+                "retry": 0,
+            }
+            if iface:
+                retry_kwargs["iface"] = iface
+
+            targets = unans_targets
+            for pass_no in range(extra_passes):
+                if not targets:
+                    break
+                still_unans: list[str] = []
+                for i in range(0, len(targets), 128):
+                    chunk = targets[i:i + 128]
+                    pkts = [Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=ip) for ip in chunk]
+                    try:
+                        ans, unans = srp(pkts, **retry_kwargs)
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("[ARP] Retry passe %d échoué : %s", pass_no + 2, e)
+                        continue
+                    for _, rcv in ans:
+                        _record(rcv.psrc, rcv.hwsrc)
+                    for pkt in unans or []:
+                        try:
+                            still_unans.append(pkt[ARP].pdst)
+                        except Exception:
+                            continue
+                targets = still_unans
+
+        # ── Recoupement avec le cache ARP du noyau ──────────────────────────
+        for ip, mac in _read_arp_cache(iface=iface).items():
+            _record(ip, mac)
+
+    finally:
+        if sniffer is not None:
+            try:
+                sniffer.stop()
+            except Exception:
+                pass
+
+    # ── Consolidation et détection de conflit ───────────────────────────────
+    hosts: dict = {}
+    for ip, mac_counts in seen.items():
+        if len(mac_counts) > 1:
+            log.warning(
+                "[ARP] MACs conflictuels pour %s : %s — proxy ARP ou spoofing possible.",
+                ip, sorted(mac_counts.keys()),
+            )
+        # MAC majoritaire (réponses multiples = signal plus fort)
+        best_mac = max(mac_counts.items(), key=lambda kv: kv[1])[0]
+        hosts[ip] = {"ip": ip, "mac": best_mac}
+
     return hosts
 
 
-def _nmap_ping(hosts: str | list[str], timeout: int = 30) -> dict:
+def _fire_cb(cb: HostCallback | None, ip: str, mac: str) -> None:
+    """Appelle `cb(ip, mac)` en avalant les exceptions."""
+    if cb is None:
+        return
+    try:
+        cb(ip, mac)
+    except Exception as e:  # noqa: BLE001
+        log.debug("on_host_found exception : %s", e)
+
+
+def _nmap_ping(
+    hosts: str | list[str],
+    timeout: int = 30,
+    on_host_found: HostCallback | None = None,
+) -> dict:
     """
     Ping sweep nmap (-sn). Retourne {ip: {"ip": str, "mac": str}}.
 
@@ -169,7 +381,7 @@ def _nmap_ping(hosts: str | list[str], timeout: int = 30) -> dict:
         log.error("[NMAP] Ping sweep échoué : %s", e)
         return {}
 
-    hosts: dict = {}
+    found: dict = {}
     for host in nm.all_hosts():
         try:
             state = nm[host].state()
@@ -180,11 +392,17 @@ def _nmap_ping(hosts: str | list[str], timeout: int = 30) -> dict:
                 mac = nm[host].get("addresses", {}).get("mac", "N/A")
             except Exception:
                 mac = "N/A"
-            hosts[host] = {"ip": host, "mac": mac or "N/A"}
-    return hosts
+            mac = mac or "N/A"
+            found[host] = {"ip": host, "mac": mac}
+            _fire_cb(on_host_found, host, mac)
+    return found
 
 
-def _nmap_arp_ping(network: ipaddress.IPv4Network, timeout: int = 30) -> dict:
+def _nmap_arp_ping(
+    network: ipaddress.IPv4Network,
+    timeout: int = 30,
+    on_host_found: HostCallback | None = None,
+) -> dict:
     """
     Découverte ARP via nmap (-PR). Retourne {ip: {"ip": str, "mac": str}}.
     """
@@ -200,7 +418,7 @@ def _nmap_arp_ping(network: ipaddress.IPv4Network, timeout: int = 30) -> dict:
         log.error("[NMAP] ARP ping échoué : %s", e)
         return {}
 
-    hosts: dict = {}
+    found: dict = {}
     for host in nm.all_hosts():
         try:
             state = nm[host].state()
@@ -211,17 +429,21 @@ def _nmap_arp_ping(network: ipaddress.IPv4Network, timeout: int = 30) -> dict:
                 mac = nm[host].get("addresses", {}).get("mac", "N/A")
             except Exception:
                 mac = "N/A"
-            hosts[host] = {"ip": host, "mac": mac or "N/A"}
-    return hosts
+            mac = mac or "N/A"
+            found[host] = {"ip": host, "mac": mac}
+            _fire_cb(on_host_found, host, mac)
+    return found
 
 
 def _discover_network(
     network: ipaddress.IPv4Network,
     timeout: int,
-    allow_large_nmap: bool,
-    port_count: int | None,
-    large_nmap_max_ports: int,
-    large_nmap_max_hosts: int,
+    allow_large_nmap: bool = False,
+    port_count: int | None = None,
+    large_nmap_max_ports: int = 16,
+    large_nmap_max_hosts: int = 1024,
+    iface: str | None = None,
+    on_host_found: HostCallback | None = None,
 ) -> dict:
     """
     Lance ARP et nmap ping en parallèle sur les petits réseaux.
@@ -259,12 +481,19 @@ def _discover_network(
                 )
             # ARP + nmap ping en parallèle : on prend le meilleur des deux
             with ThreadPoolExecutor(max_workers=2) as ex:
-                arp_fut  = ex.submit(_arp_scan, network, timeout, 2)
-                nmap_fut = ex.submit(_nmap_ping, nmap_hosts_target, timeout)
+                arp_fut  = ex.submit(
+                    _arp_scan, network, timeout, 2, iface, on_host_found,
+                )
+                nmap_fut = ex.submit(
+                    _nmap_ping, nmap_hosts_target, timeout, on_host_found,
+                )
             arp        = arp_fut.result()
             nmap_hosts = nmap_fut.result()
         else:
-            arp        = _arp_scan(network, timeout=timeout, retry=2)
+            arp        = _arp_scan(
+                network, timeout=timeout, retry=2, iface=iface,
+                on_host_found=on_host_found,
+            )
             nmap_hosts = {}
     else:
         arp = {}
@@ -277,7 +506,9 @@ def _discover_network(
                     port_count,
                     large_nmap_max_ports,
                 )
-            nmap_hosts = _nmap_ping(nmap_hosts_target, timeout=timeout)
+            nmap_hosts = _nmap_ping(
+                nmap_hosts_target, timeout=timeout, on_host_found=on_host_found,
+            )
         else:
             log.warning(
                 "Réseau %s trop grand pour nmap et ARP désactivé (pas root).",
@@ -297,6 +528,7 @@ def discover(
     port_count: int | None = None,
     large_nmap_max_ports: int = 16,
     large_nmap_max_hosts: int = 1024,
+    on_host_found: HostCallback | None = None,
 ) -> list[dict]:
     """
     Découverte des hôtes actifs. Retourne une liste de dicts ``{"ip": str, "mac": str}``
@@ -310,11 +542,48 @@ def discover(
         port_count: Nombre de ports pour décider du seuil (optionnel).
         large_nmap_max_ports: Seuil de ports max pour activer nmap sur grands réseaux.
         large_nmap_max_hosts: Limite d'hôtes scannés par nmap sur grands réseaux.
+        on_host_found: Callback ``(ip, mac)`` appelé en temps réel dès qu'un
+            hôte est découvert, exactement une fois par IP. Idéal pour piloter
+            une barre de progression. Peut être invoqué depuis n'importe quel
+            thread — le callback doit être thread-safe côté appelant.
     """
     if not _is_root():
         log.warning("Sans root — ARP désactivé, nmap limité aux réseaux ≤ /%d.", _NMAP_MAX_PREFIX)
 
     results: dict = {}
+
+    # local_ips détecté tôt (avant le wrapper) pour pouvoir filtrer la machine
+    # locale dans les notifications, même quand l'utilisateur passe `network=`.
+    if network:
+        try:
+            _, local_ips = _interface_networks()
+        except Exception:
+            local_ips = set()
+    else:
+        networks, local_ips = _interface_networks()
+        if not networks:
+            log.warning("Aucune interface réseau utilisable détectée.")
+            return []
+
+    # Wrapper de dédup global : le callback utilisateur est appelé au plus
+    # une fois par IP unique, toutes sources confondues (ARP, nmap, sniffer,
+    # cache noyau, interfaces multiples).
+    notified: set[str] = set()
+    notified_lock = threading.Lock()
+
+    def _notify(ip: str, mac: str) -> None:
+        if ip in local_ips:
+            return
+        with notified_lock:
+            if ip in notified:
+                return
+            notified.add(ip)
+        try:
+            on_host_found(ip, mac)  # type: ignore[misc]
+        except Exception as e:  # noqa: BLE001
+            log.debug("on_host_found exception : %s", e)
+
+    wrapped_cb: HostCallback | None = _notify if on_host_found is not None else None
 
     if network:
         net = ipaddress.ip_network(network, strict=False)
@@ -327,20 +596,15 @@ def discover(
                 port_count,
                 large_nmap_max_ports,
                 large_nmap_max_hosts,
+                iface=iface,
+                on_host_found=wrapped_cb,
             ).values()
         )
-        local_ips: set = set()
     else:
-        networks, local_ips = _interface_networks()
-        if not networks:
-            log.warning("Aucune interface réseau utilisable détectée.")
-            return []
-
         # Découverte simultanée sur toutes les interfaces
         def _scan_iface(net_str: str, info: dict) -> tuple[str, list]:
             net   = info["network"]
             label = f"{info['iface']} ({net_str})"
-            log.info("Découverte sur %s — %d hôtes possibles", label, net.num_addresses)
             merged = _discover_network(
                 net,
                 timeout,
@@ -348,6 +612,8 @@ def discover(
                 port_count,
                 large_nmap_max_ports,
                 large_nmap_max_hosts,
+                iface=info["iface"],
+                on_host_found=wrapped_cb,
             )
             return label, list(merged.values())
 

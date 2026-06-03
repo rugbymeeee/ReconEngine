@@ -2,15 +2,26 @@
 Lookup constructeur depuis l'adresse MAC (IEEE OUI - Organizationally Unique
 Identifier sur les 3 premiers octets).
 
-Liste curée des fabricants les plus fréquents en environnement PME / domestique.
-Couvre ~95% des appareils typiques d'un audit réseau standard (postes, serveurs,
-imprimantes, routeurs, IoT, NAS, machines virtuelles).
+Deux sources, par ordre de priorité :
+  1. Base système complète (~52 000 OUI) si disponible — typiquement
+     `/usr/share/nmap/nmap-mac-prefixes`, livrée avec nmap (déjà une dépendance).
+     Chargée une seule fois, en cache mémoire.
+  2. Liste curée embarquée (ci-dessous) — fabricants les plus fréquents en
+     environnement PME / domestique, labels affinés (Hyper-V, QEMU/KVM…).
+     Sert de fallback offline sur PCB et **surcharge** la base système pour les
+     préfixes qu'elle définit (labels plus parlants pour l'audit).
 
-Pour une couverture exhaustive (~30 000 OUI), basculer sur la base IEEE complète
-ou installer un package type `manuf`. Cette liste reste intentionnellement
-légère pour rester sans dépendance externe et fonctionner offline sur PCB.
+En plus du constructeur, le module distingue :
+  - les MAC **localement administrées** (2ᵉ bit de poids faible du 1ᵉʳ octet) :
+    typiquement les MAC **aléatoires** des téléphones (vie privée) ou les
+    conteneurs Docker (`02:42:…`) — un lookup OUI y est inutile ;
+  - les MAC **multicast/broadcast** (1ᵉʳ bit du 1ᵉʳ octet).
 """
+import logging
+import os
 import re
+
+log = logging.getLogger(__name__)
 
 # Format clé : 6 hex uppercase sans séparateur (3 premiers octets).
 # Format valeur : nom court du constructeur.
@@ -165,11 +176,107 @@ OUI_PREFIXES: dict[str, str] = {
 }
 
 
+# Bases système candidates (la première lisible gagne). Surchargée par
+# l'env var RECONENGINE_OUI_DB. Format attendu : « <hex OUI> <nom> » par ligne,
+# séparateurs ignorés dans le préfixe (compatible nmap-mac-prefixes et
+# arp-scan/ieee-oui.txt).
+_SYSTEM_DB_PATHS: tuple[str, ...] = (
+    "/usr/share/nmap/nmap-mac-prefixes",
+    "/usr/share/arp-scan/ieee-oui.txt",
+)
+
+# Préfixe Docker : 02:42 + 4 octets dérivés de l'IP du conteneur. Pas un OUI
+# IEEE réel, mais identifiant fiable et fréquent en audit.
+_DOCKER_PREFIX = "0242"
+
+_db_cache: dict[str, str] | None = None
+
+
+def _candidate_paths() -> list[str]:
+    paths: list[str] = []
+    env = os.environ.get("RECONENGINE_OUI_DB")
+    if env:
+        paths.append(env)
+    paths.extend(_SYSTEM_DB_PATHS)
+    return paths
+
+
+def _load_db() -> dict[str, str]:
+    """
+    Charge (une fois) la base OUI : système si dispo, puis surcharge curée.
+
+    Fail-safe : si aucun fichier système lisible, retourne la liste curée seule.
+    Le résultat est mis en cache pour toute la durée du process.
+    """
+    global _db_cache
+    if _db_cache is not None:
+        return _db_cache
+
+    db: dict[str, str] = {}
+    for path in _candidate_paths():
+        if not path or not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split(None, 1)
+                    if len(parts) != 2:
+                        continue
+                    prefix = re.sub(r"[^0-9A-Fa-f]", "", parts[0]).upper()
+                    if len(prefix) != 6:
+                        continue
+                    name = parts[1].strip()
+                    if name:
+                        db.setdefault(prefix, name)
+        except OSError as e:  # noqa: BLE001
+            log.debug("[OUI] Lecture %s échouée : %s", path, e)
+            continue
+        if db:
+            log.debug("[OUI] %d préfixes chargés depuis %s", len(db), path)
+            break
+
+    # La liste curée surcharge la base système : labels affinés pour l'audit
+    # (Hyper-V, QEMU/KVM, VirtualBox…) plus parlants qu'un nom IEEE brut.
+    db.update(OUI_PREFIXES)
+    _db_cache = db
+    return db
+
+
 def _norm(mac: str) -> str:
     """Normalise une MAC en 12 hex uppercase sans séparateurs."""
     if not mac:
         return ""
     return re.sub(r"[^0-9A-Fa-f]", "", mac).upper()
+
+
+def _first_octet(mac: str) -> int | None:
+    norm = _norm(mac)
+    if len(norm) < 2:
+        return None
+    try:
+        return int(norm[:2], 16)
+    except ValueError:
+        return None
+
+
+def is_multicast(mac: str) -> bool:
+    """True si la MAC est multicast/broadcast (1ᵉʳ bit du 1ᵉʳ octet à 1)."""
+    octet = _first_octet(mac)
+    return octet is not None and bool(octet & 0x01)
+
+
+def is_locally_administered(mac: str) -> bool:
+    """
+    True si la MAC est localement administrée (2ᵉ bit du 1ᵉʳ octet à 1).
+
+    Couvre les MAC aléatoires des smartphones (Android/iOS — vie privée), les
+    conteneurs Docker (02:42:…) et certaines VM. Un lookup OUI IEEE y est vain.
+    """
+    octet = _first_octet(mac)
+    return octet is not None and bool(octet & 0x02)
 
 
 def vendor(mac: str) -> str:
@@ -190,4 +297,31 @@ def vendor(mac: str) -> str:
     norm = _norm(mac)
     if len(norm) < 6:
         return ""
-    return OUI_PREFIXES.get(norm[:6], "")
+    if norm.startswith(_DOCKER_PREFIX):
+        return "Docker (conteneur)"
+    return _load_db().get(norm[:6], "")
+
+
+def label(mac: str) -> str:
+    """
+    Libellé d'identification matérielle lisible pour l'affichage / le rapport.
+
+    Priorité au constructeur (lookup OUI, Docker, VM). À défaut, qualifie la
+    nature de la MAC plutôt que de renvoyer du vide :
+      - localement administrée → "MAC aléatoire (vie privée)" ;
+      - sinon → "" (réellement inconnue).
+
+    Examples:
+        >>> label("B8:27:EB:12:34:56")
+        'Raspberry Pi'
+        >>> label("7E:ED:ED:C6:90:DF")   # bit localement administré
+        'MAC aléatoire (vie privée)'
+    """
+    v = vendor(mac)
+    if v:
+        return v
+    # MAC aléatoire = unicast + localement administrée (les téléphones modernes).
+    # On exclut le multicast/broadcast, qui n'identifie jamais un hôte.
+    if is_locally_administered(mac) and not is_multicast(mac):
+        return "MAC aléatoire (vie privée)"
+    return ""

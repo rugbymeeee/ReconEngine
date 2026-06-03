@@ -28,7 +28,16 @@ import scan
 import status
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+
+import mac_vendor
 from rich.table import Table
 
 cfg_mod.setup_logging()
@@ -74,7 +83,14 @@ def _port_count(port_spec: str) -> int:
 
 def render_host(console: Console, ip: str, data, cache: dict, mac: str = "N/A") -> None:
     """Affiche les résultats d'un hôte dans le terminal."""
-    mac_str = f"  [dim]MAC :[/] {mac}" if mac and mac != "N/A" else ""
+    mac_str = ""
+    if mac and mac != "N/A":
+        try:
+            vendor_label = mac_vendor.label(mac)
+        except Exception:
+            vendor_label = ""
+        vendor_str = f" [green]· {vendor_label}[/]" if vendor_label else ""
+        mac_str = f"  [dim]MAC :[/] {mac}{vendor_str}"
     console.rule(f"[bold cyan]{ip}[/]{mac_str}")
 
     os_str = scan.get_os(data)
@@ -90,15 +106,9 @@ def render_host(console: Console, ip: str, data, cache: dict, mac: str = "N/A") 
         console.print("  [yellow]Aucun port détecté.[/]")
         return
 
-    table = Table(show_header=True, header_style="bold blue", show_lines=False, expand=False)
-    table.add_column("Port",    style="cyan",       justify="right", width=7)
-    table.add_column("Proto",   style="dim",         width=6)
-    table.add_column("État",                         width=9)
-    table.add_column("Service",                      width=16)
-    table.add_column("Produit / Version", style="dim")
-    table.add_column("Exploits connus",  style="red", width=38)
-
-    rows = 0
+    # Collecte d'abord : permet de masquer la colonne « Exploits » si aucun hôte
+    # n'en a (cas le plus fréquent) → tableau plus compact et lisible.
+    collected: list[tuple] = []
     for proto in protocols:
         for port in sorted(data[proto].keys()):
             pinfo = data[proto][port]
@@ -108,19 +118,34 @@ def render_host(console: Console, ip: str, data, cache: dict, mac: str = "N/A") 
             query = rapport.software_query(pinfo)
             found = exploits.find(query, cache=cache) if query else []
             exploit_str = " · ".join(e.get("Title", "?") for e in found[:2])
-            table.add_row(
-                str(port),
-                proto,
-                STATE_DISPLAY.get(state, state),
-                pinfo.get("name", ""),
-                _service_str(pinfo),
-                exploit_str,
-            )
-            rows += 1
+            collected.append((str(port), proto, state, pinfo, exploit_str))
 
-    if rows == 0:
+    if not collected:
         console.print("  [yellow]Aucun port ouvert ou filtré détecté.[/]")
         return
+
+    has_exploits = any(row[4] for row in collected)
+
+    table = Table(show_header=True, header_style="bold blue", show_lines=False, expand=False)
+    table.add_column("Port",    style="cyan",       justify="right", width=7)
+    table.add_column("Proto",   style="dim",         width=6)
+    table.add_column("État",                         width=9)
+    table.add_column("Service",                      width=16)
+    table.add_column("Produit / Version", style="dim")
+    if has_exploits:
+        table.add_column("Exploits connus", style="red", width=38)
+
+    for port, proto, state, pinfo, exploit_str in collected:
+        cells = [
+            port,
+            proto,
+            STATE_DISPLAY.get(state, state),
+            pinfo.get("name", "") or "[dim]—[/]",
+            _service_str(pinfo) or "[dim]—[/]",
+        ]
+        if has_exploits:
+            cells.append(exploit_str or "[dim]—[/]")
+        table.add_row(*cells)
 
     console.print(table)
 
@@ -222,23 +247,61 @@ def main() -> None:
     start = time.monotonic()
     status.set_state(status.State.DISCOVERING)
     console.print("\n[bold]Phase 1[/] — Découverte des hôtes")
-    try:
-        port_count = _port_count(cfg.scan.ports)
-        if cfg.scan.allow_large_nmap and port_count > cfg.scan.large_nmap_max_ports:
-            log.warning(
-                "allow-large-nmap actif mais ports=%d > seuil=%d — nmap sur grands réseaux sera ignoré.",
-                port_count,
-                cfg.scan.large_nmap_max_ports,
-            )
-        discovered_hosts = discover.discover(
-            iface=args.iface or os.environ.get("RECONENGINE_IFACE") or None,
-            network=args.target,
-            timeout=cfg.scan.discovery_timeout,
-            allow_large_nmap=cfg.scan.allow_large_nmap,
-            port_count=port_count,
-            large_nmap_max_ports=cfg.scan.large_nmap_max_ports,
-            large_nmap_max_hosts=cfg.scan.large_nmap_max_hosts,
+    port_count = _port_count(cfg.scan.ports)
+    if cfg.scan.allow_large_nmap and port_count > cfg.scan.large_nmap_max_ports:
+        log.warning(
+            "allow-large-nmap actif mais ports=%d > seuil=%d — nmap sur grands réseaux sera ignoré.",
+            port_count,
+            cfg.scan.large_nmap_max_ports,
         )
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold]{task.description}"),
+            BarColumn(bar_width=30, pulse_style="cyan"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as discover_progress:
+            discover_task = discover_progress.add_task(
+                "Découverte ARP + nmap…", total=None,
+            )
+            found = [0]  # mutable holder pour closure
+
+            def _on_host(ip: str, mac: str) -> None:
+                found[0] += 1
+                if mac and mac != "N/A":
+                    try:
+                        v = mac_vendor.label(mac)
+                    except Exception:
+                        v = ""
+                    vendor_str = f"  [dim]·[/] [green]{v}[/]" if v else ""
+                    mac_display = f"[dim]MAC :[/] {mac}{vendor_str}"
+                else:
+                    mac_display = "[dim]MAC : inconnue[/]"
+                discover_progress.console.print(
+                    f"  [green]✓[/] [cyan]{ip:<15}[/]  {mac_display}"
+                )
+                discover_progress.update(
+                    discover_task,
+                    description=f"Découverte… [bold green]{found[0]}[/] hôte(s) trouvé(s)",
+                )
+
+            discovered_hosts = discover.discover(
+                iface=args.iface or os.environ.get("RECONENGINE_IFACE") or None,
+                network=args.target,
+                timeout=cfg.scan.discovery_timeout,
+                allow_large_nmap=cfg.scan.allow_large_nmap,
+                port_count=port_count,
+                large_nmap_max_ports=cfg.scan.large_nmap_max_ports,
+                large_nmap_max_hosts=cfg.scan.large_nmap_max_hosts,
+                on_host_found=_on_host,
+            )
+            discover_progress.update(
+                discover_task,
+                description=f"Découverte terminée — [bold green]{found[0]}[/] hôte(s)",
+            )
     except Exception:
         status.set_state(status.State.ERROR)
         status.shutdown()

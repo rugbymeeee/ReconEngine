@@ -921,7 +921,7 @@ def _build_unreachable_host(ip: str, mac: str = "N/A") -> dict:
     return {
         "ip":                    ip,
         "mac":                   mac,
-        "vendor":                mac_vendor.vendor(mac),
+        "vendor":                mac_vendor.label(mac),
         "os":                    "",
         "host_type":             "unknown",
         "risk":                  "FAIBLE",
@@ -1084,7 +1084,7 @@ def _build_topology(all_hosts: list[dict], hosts: list) -> list:
         host = host_by_ip.get(ip_str, _build_unreachable_host(ip_str, mac))
         entry = dict(host)
         entry["mac"] = mac  # override with ARP-discovered MAC (plus fiable)
-        entry["vendor"] = mac_vendor.vendor(mac)
+        entry["vendor"] = mac_vendor.label(mac)
         last_octet = ip_str.rsplit(".", 1)[-1] if "." in ip_str else ""
         entry["is_gateway"] = last_octet in ("1", "254")
         subnets[subnet].append(entry)
@@ -1362,7 +1362,7 @@ def build_report_data(
             continue
         host = _build_host(ip, data, total_ports, cache)
         host["mac"] = mac_by_ip.get(ip, "N/A")
-        host["vendor"] = mac_vendor.vendor(host["mac"])
+        host["vendor"] = mac_vendor.label(host["mac"])
         hosts.append(host)
         total_open += host["open_ports_count"]
         total_filtered += host["filtered_ports_count"]
