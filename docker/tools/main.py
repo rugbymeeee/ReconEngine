@@ -11,6 +11,7 @@ Usage :
   python main.py [quick|full] [-t CIDR] [-i IFACE] [-o OUTPUT] [--ports PORTS] [--workers N] [--timeout SEC]
 """
 import argparse
+import contextlib
 import ipaddress
 import datetime
 import logging
@@ -38,10 +39,42 @@ from rich.progress import (
 )
 
 import mac_vendor
+from rich.logging import RichHandler
 from rich.table import Table
 
 cfg_mod.setup_logging()
 log = logging.getLogger(__name__)
+
+
+def _attach_rich_logging(console: Console) -> None:
+    """
+    Route les logs via la console Rich pour qu'ils coexistent proprement avec
+    les barres de progression : Rich repositionne la zone « live » avant chaque
+    log, ce qui évite les lignes collées à la barre (`0:17:3311:37:08`).
+    """
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    root.addHandler(RichHandler(
+        console=console,
+        show_path=False,
+        markup=False,
+        rich_tracebacks=True,
+        log_time_format="%H:%M:%S",
+    ))
+
+
+@contextlib.contextmanager
+def _muted(name: str, *, level: int, enabled: bool = True):
+    """Élève temporairement le niveau d'un logger (no-op si `enabled` est faux)."""
+    logger = logging.getLogger(name)
+    prev = logger.level
+    if enabled:
+        logger.setLevel(level)
+    try:
+        yield
+    finally:
+        logger.setLevel(prev)
 
 STATE_DISPLAY = {
     "open": "[green]ouvert[/]",
@@ -79,6 +112,30 @@ def _port_count(port_spec: str) -> int:
             except ValueError:
                 log.warning("Port invalide : '%s'", chunk)
     return total or 1
+
+
+def _port_states(data) -> tuple[list, list]:
+    """Retourne (ports_ouverts, ports_filtrés) triés depuis un résultat de scan."""
+    open_ports: list = []
+    filtered_ports: list = []
+    if data is None:
+        return open_ports, filtered_ports
+    try:
+        protocols = data.all_protocols()
+    except Exception:
+        return open_ports, filtered_ports
+    for proto in protocols:
+        try:
+            ports = data[proto]
+        except Exception:
+            continue
+        for port in sorted(ports.keys()):
+            state = ports[port].get("state", "")
+            if state == "open":
+                open_ports.append(port)
+            elif state == "filtered":
+                filtered_ports.append(port)
+    return sorted(open_ports), sorted(filtered_ports)
 
 
 def render_host(console: Console, ip: str, data, cache: dict, mac: str = "N/A") -> None:
@@ -232,6 +289,7 @@ def main() -> None:
             scan_all_max_hosts = cfg.scan.large_nmap_max_hosts
 
     console = Console()
+    _attach_rich_logging(console)
     profile_info = cfg_mod.SCAN_PROFILES.get(cfg.scan.profile, cfg_mod.SCAN_PROFILES["full"])
 
     ports_preview = cfg.scan.ports[:72] + ("…" if len(cfg.scan.ports) > 72 else "")
@@ -379,15 +437,24 @@ def main() -> None:
         + (" · [dim]mode deux phases (TCP complet → services)[/]" if twophase else "")
     )
 
-    with Progress(
+    # Pendant l'affichage live, on coupe le bruit interne du module `scan`
+    # (logs « Phase 1/Phase 2 » par hôte, « non trouvé en phase 1 ») : les
+    # lignes ✓/⊘ suffisent à raconter le scan. En mode -v on laisse tout passer.
+    with _muted("scan", level=logging.ERROR, enabled=not args.verbose), Progress(
         SpinnerColumn(),
         TextColumn("[bold]{task.description}"),
-        BarColumn(bar_width=30),
+        BarColumn(bar_width=30, complete_style="cyan", finished_style="green"),
         TaskProgressColumn(),
+        TimeElapsedColumn(),
         console=console,
         transient=False,
     ) as progress:
         task_id = progress.add_task("Scan en cours…", total=len(ips))
+
+        # Compteurs live (mis à jour depuis le thread principal uniquement)
+        done = [0]            # hôtes scannés
+        hosts_with_ports = [0]
+        total_open = [0]      # total ports ouverts cumulés
 
         def _scan_ip(ip: str):
             try:
@@ -407,32 +474,72 @@ def main() -> None:
                 log.error("Erreur inattendue pour %s [%s] : %s", ip, type(e).__name__, e)
                 return None
 
+        def _report_scan(ip: str, result) -> None:
+            """Stocke le résultat, affiche une ligne live et avance la barre."""
+            progress.advance(task_id)
+            done[0] += 1
+
+            open_ports, filtered_ports = _port_states(result)
+            n_open, n_filt = len(open_ports), len(filtered_ports)
+
+            if result is None or (n_open == 0 and n_filt == 0):
+                progress.console.print(
+                    f"  [dim]⊘ {ip:<15}  aucun port ouvert[/]"
+                )
+            else:
+                scan_results[ip] = result
+                hosts_with_ports[0] += 1
+                total_open[0] += n_open
+
+                detail = "  ·  ".join(filter(None, [
+                    f"[bold green]{n_open}[/] ouvert(s)" if n_open else "",
+                    f"[yellow]{n_filt}[/] filtré(s)" if n_filt else "",
+                ]))
+                preview = ", ".join(str(p) for p in open_ports[:8])
+                if n_open > 8:
+                    preview += " …"
+                ports_str = f"  [dim]→ {preview}[/]" if preview else ""
+
+                os_str = scan.get_os(result) or ""
+                os_part = f"  [dim]·[/] [magenta]{os_str}[/]" if os_str else ""
+
+                progress.console.print(
+                    f"  [green]✓[/] [cyan]{ip:<15}[/]  {detail}{ports_str}{os_part}"
+                )
+
+            progress.update(
+                task_id,
+                description=(
+                    f"Scan… [bold green]{hosts_with_ports[0]}[/] hôte(s) actif(s) "
+                    f"· [bold]{total_open[0]}[/] port(s) ouvert(s)"
+                ),
+            )
+
         remaining_ips = ips
         if localhost_first and ips:
             first_ip = ips[0]
             remaining_ips = ips[1:]
-            result = _scan_ip(first_ip)
-            progress.advance(task_id)
-            if result is not None:
-                scan_results[first_ip] = result
-            else:
-                log.info("Hôte %s : aucun port détecté ou inaccessible", first_ip)
+            _report_scan(first_ip, _scan_ip(first_ip))
 
         if remaining_ips:
             with ThreadPoolExecutor(max_workers=cfg.scan.max_workers) as executor:
                 futures = {executor.submit(_scan_ip, ip): ip for ip in remaining_ips}
                 for future in as_completed(futures):
                     ip = futures[future]
-                    progress.advance(task_id)
                     try:
                         result = future.result()
                     except Exception as e:
                         log.error("Erreur inattendue pour %s [%s] : %s", ip, type(e).__name__, e)
                         result = None
-                    if result is not None:
-                        scan_results[ip] = result
-                    else:
-                        log.info("Hôte %s : aucun port détecté ou inaccessible", ip)
+                    _report_scan(ip, result)
+
+        progress.update(
+            task_id,
+            description=(
+                f"Scan terminé — [bold green]{hosts_with_ports[0]}[/] hôte(s) actif(s) "
+                f"· [bold]{total_open[0]}[/] port(s) ouvert(s)"
+            ),
+        )
 
     elapsed = time.monotonic() - start
     m, s = divmod(int(elapsed), 60)

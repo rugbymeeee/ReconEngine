@@ -646,7 +646,6 @@ def discover(
                 continue
             seen.add(ip)
             mac = h.get("mac", "N/A")
-            log.info("  ↳ %-16s  MAC: %s", ip, mac)
             host_list.append({"ip": ip, "mac": mac})
 
     return host_list

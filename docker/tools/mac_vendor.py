@@ -323,5 +323,5 @@ def label(mac: str) -> str:
     # MAC aléatoire = unicast + localement administrée (les téléphones modernes).
     # On exclut le multicast/broadcast, qui n'identifie jamais un hôte.
     if is_locally_administered(mac) and not is_multicast(mac):
-        return "MAC aléatoire (vie privée)"
+        return "MAC aléatoire"
     return ""
